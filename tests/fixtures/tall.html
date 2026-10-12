@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Tall Page Fixture</title>
+  <style>
+    .row { height: 120px; border-bottom: 1px solid #ccc; padding: 8px; }
+    #bottom-btn { margin: 40px 0; }
+  </style>
+</head>
+<body>
+  <h1>Tall page fixture</h1>
+  <!-- A page taller than the viewport: exercises full_page screenshot stitching
+       and scroll-into-view for an element below the fold. -->
+  <div id="rows"></div>
+  <button type="button" id="bottom-btn" onclick="document.getElementById('bottom-result').textContent='BOTTOM_CLICKED'">Bottom button</button>
+  <div id="bottom-result"></div>
+  <script>
+    var rows = document.getElementById('rows');
+    for (var i = 0; i < 60; i++) {
+      var d = document.createElement('div');
+      d.className = 'row';
+      d.textContent = 'Row ' + i;
+      rows.appendChild(d);
+    }
+  </script>
+</body>
+</html>

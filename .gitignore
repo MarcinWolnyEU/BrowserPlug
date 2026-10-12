@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+MANIFEST
+
+# Virtual Environment
+.venv/
+
+# Node (JS test tooling). No lockfile: jsdom is a floor, not a pin.
+node_modules/
+/package-lock.json
+
+# Extension build artifacts
+dist/
+
+# Testing
+.coverage
+.pytest_cache/
+.ruff_cache/
+coverage.xml
+## Test import symbolic links (tests/test_imports.py says how to create them)
+tests/integration/test_imports.py
+tests/unit/test_imports.py
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs — load-bearing: these contain absolute paths, usernames and tool-call
+# arguments. *.log alone does NOT match a rotated browserplug-server.log.2, hence the second
+# pattern.
+*.log
+*.log.*
+logs/
+
+# Temporary files
+.tmp/
+.temp/
+/graft/
+.playwright-mcp/
+
+# Feedback material in root — feedback1/, feedback2/, ... AND feedback-template.html.
+/feedback*
+
+# AI General
+AGENTS.md
+CLAUDE.md
+
+# Kilo Code / Kilo CLI
+/kilo.json
+
+# Claude Code
+.claude/*
+!.claude/settings.json
+
+# Managed Tor client: the downloaded bundle and tor's own data (docs/proxy-and-tor.md)
+/server/tor/runtime/
+
+# The user's own predefined page_eval scripts (docs/predefined-scripts.md). The folder ships
+# empty so it is always there; its contents are the user's and survive every update.
+/custom-scripts/*
+!/custom-scripts/.gitkeep
+
+# personal tooling configs
+.claude/settings.json
+.mcp.json
+reasonix.toml

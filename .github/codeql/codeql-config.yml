@@ -1,0 +1,6 @@
+name: BrowserPlug CodeQL
+# Third-party bundles are scanned upstream. vendor-src holds the build inputs of the mlkem bundle.
+paths-ignore:
+  - "**/vendor/**"
+  - vendor-src
+  - node_modules

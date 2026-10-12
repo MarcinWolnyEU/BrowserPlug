@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Revert input fixture</title>
+</head>
+<body>
+<h1>Controlled input that ignores untrusted edits</h1>
+<!-- A framework-controlled field. The handler ignores synthetic (isTrusted:false)
+     edits and re-renders its bound model value on the next tick;
+     a genuinely committed (trusted) value would be mirrored into data-committed.
+     A correct fill implementation must report "value did not take" here — the
+     DOM-poke workaround silently reverts. -->
+<label for="ctl">Controlled field</label>
+<input id="ctl" value="model-value">
+<span id="status">untouched</span>
+<script>
+  (function () {
+    var el = document.getElementById('ctl');
+    var model = el.value;
+    el.addEventListener('input', function (e) {
+      if (e.isTrusted) {
+        model = el.value;
+        el.setAttribute('data-committed', model);
+        document.getElementById('status').textContent = 'committed';
+      } else {
+        // like Vueform in sync mode: pull the value back from the model
+        setTimeout(function () { el.value = model; }, 0);
+        document.getElementById('status').textContent = 'reverted-untrusted';
+      }
+    });
+  })();
+</script>
+</body>
+</html>

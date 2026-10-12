@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Frames Fixture</title>
+</head>
+<body>
+  <h1>Frames fixture</h1>
+  <p id="top-marker">TOP_FRAME_CONTENT</p>
+  <!-- A same-origin child frame: page_frames must list it; page_snapshot/click
+       with its frame_id must reach the inner button. (Cross-origin frame
+       addressing is exercised live, not in this local fixture.) -->
+  <iframe id="child" src="frame_inner.html" width="400" height="200"></iframe>
+</body>
+</html>

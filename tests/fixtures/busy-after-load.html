@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Busy After Load Fixture</title>
+</head>
+<body>
+  <h1>Busy after load</h1>
+  <p>Logs an error while it parses, then from the load event runs eight 300 ms tasks back
+  to back, logging an error in each, so a flush request always lands mid-task.</p>
+
+  <script>
+    console.error('load-error early');
+    window.addEventListener('load', function () {
+      // MessageChannel, not setTimeout: a background tab clamps timers to about a second,
+      // which would leave the page idle between tasks.
+      var channel = new MessageChannel();
+      var done = 0;
+      channel.port1.onmessage = function () {
+        var end = performance.now() + 300;
+        while (performance.now() < end) { /* one long task */ }
+        done++;
+        console.error('busy-error ' + done);
+        if (done < 8) channel.port2.postMessage(0);
+      };
+      channel.port2.postMessage(0);
+    });
+  </script>
+</body>
+</html>

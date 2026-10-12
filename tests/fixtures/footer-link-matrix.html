@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A big footer link matrix beside a small product grid</title>
+<!--
+  Fixture: the adversarial case for the detector's SCORING, not its grouping.
+
+  Both groups here are genuine repeated patterns with links and real text. The footer
+  has 40 items; the product grid has 12. Weighting mostly by size (the first version
+  used n^1.4 with links and prices treated as interchangeable evidence) hands the
+  footer the win by a comfortable margin — arithmetic worked through on these exact
+  numbers before the fixture existed, then pinned here.
+
+  Getting this wrong is not a near-miss: page_snapshot(mode="records") would return
+  40 tidy rows of footer navigation, in the right shape, with the right selector, on
+  a page whose actual listing it never looked at. That is precisely the "noise dressed
+  as data" the mode is supposed to refuse.
+
+  GROUND TRUTH: the 12 priced product cards win; the footer is at most the runner-up.
+  What makes a listing a listing is MONEY, not link count.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  #products { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .product { border: 1px solid #ccc; border-radius: 8px; padding: 10px; }
+  .product h2 { font-size: 14px; margin: 0 0 4px; }
+  footer { margin-top: 40px; border-top: 1px solid #ddd; padding-top: 16px; }
+  #footer-links { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+                  list-style: none; padding: 0; }
+</style>
+</head>
+<body>
+<h1>Dyski twarde</h1>
+
+<div id="products">
+  <div class="product"><a href="/p/1"><h2>Seagate BarraCuda 4TB</h2></a><span>399,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/2"><h2>Toshiba P300 4TB</h2></a><span>419,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/3"><h2>WD Blue 4TB</h2></a><span>429,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/4"><h2>WD Red Plus 4TB</h2></a><span>519,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/5"><h2>Seagate IronWolf 4TB</h2></a><span>549,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/6"><h2>Toshiba N300 4TB</h2></a><span>559,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/7"><h2>WD Purple 4TB</h2></a><span>469,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/8"><h2>Seagate SkyHawk 4TB</h2></a><span>479,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/9"><h2>WD Gold 4TB</h2></a><span>749,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/10"><h2>Seagate Exos 7E8 4TB</h2></a><span>719,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/11"><h2>Toshiba MG04 4TB</h2></a><span>689,00 z&#x142;</span></div>
+  <div class="product"><a href="/p/12"><h2>HGST Ultrastar 4TB</h2></a><span>339,00 z&#x142;</span></div>
+</div>
+
+<footer>
+  <p>Popularne kategorie</p>
+  <ul id="footer-links">
+    <li><a href="/c/1">Dyski twarde HDD</a></li>
+    <li><a href="/c/2">Dyski SSD M.2</a></li>
+    <li><a href="/c/3">Dyski SSD SATA</a></li>
+    <li><a href="/c/4">Obudowy na dyski</a></li>
+    <li><a href="/c/5">Karty pamieci SD</a></li>
+    <li><a href="/c/6">Pendrive USB 3.0</a></li>
+    <li><a href="/c/7">Serwery NAS</a></li>
+    <li><a href="/c/8">Kable SATA</a></li>
+    <li><a href="/c/9">Kontrolery RAID</a></li>
+    <li><a href="/c/10">Stacje dokujace</a></li>
+    <li><a href="/c/11">Chlodzenie dyskow</a></li>
+    <li><a href="/c/12">Adaptery M.2</a></li>
+    <li><a href="/c/13">Dyski zewnetrzne</a></li>
+    <li><a href="/c/14">Macierze dyskowe</a></li>
+    <li><a href="/c/15">Taniec bitow zapasowych</a></li>
+    <li><a href="/c/16">Oprogramowanie backup</a></li>
+    <li><a href="/c/17">Niszczarki dyskow</a></li>
+    <li><a href="/c/18">Ramki 2.5 na 3.5</a></li>
+    <li><a href="/c/19">Sledzie montazowe</a></li>
+    <li><a href="/c/20">Zasilacze komputerowe</a></li>
+    <li><a href="/c/21">Plyty glowne</a></li>
+    <li><a href="/c/22">Procesory AMD</a></li>
+    <li><a href="/c/23">Procesory Intel</a></li>
+    <li><a href="/c/24">Pamieci RAM DDR4</a></li>
+    <li><a href="/c/25">Pamieci RAM DDR5</a></li>
+    <li><a href="/c/26">Karty graficzne</a></li>
+    <li><a href="/c/27">Obudowy komputerowe</a></li>
+    <li><a href="/c/28">Wentylatory 120mm</a></li>
+    <li><a href="/c/29">Chlodzenie wodne</a></li>
+    <li><a href="/c/30">Pasta termoprzewodzaca</a></li>
+    <li><a href="/c/31">Monitory 27 cali</a></li>
+    <li><a href="/c/32">Klawiatury mechaniczne</a></li>
+    <li><a href="/c/33">Myszki gamingowe</a></li>
+    <li><a href="/c/34">Sluchawki bezprzewodowe</a></li>
+    <li><a href="/c/35">Kamery internetowe</a></li>
+    <li><a href="/c/36">Drukarki laserowe</a></li>
+    <li><a href="/c/37">Skanery dokumentow</a></li>
+    <li><a href="/c/38">Routery Wi-Fi 6</a></li>
+    <li><a href="/c/39">Switche zarzadzalne</a></li>
+    <li><a href="/c/40">Karty sieciowe 10G</a></li>
+  </ul>
+</footer>
+</body>
+</html>

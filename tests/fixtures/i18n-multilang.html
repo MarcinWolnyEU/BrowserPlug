@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug I18N Multilang Fixture — العربية 中文 עברית</title>
+</head>
+<body>
+  <h1>Multilingual fixture</h1>
+  <!--
+    Exercises non-ASCII / RTL / wide-char handling across the whole tool surface:
+    text/markdown extraction, snapshot accessible-names, page_act fill round-trip
+    (JSON over WebSocket), and max_chars pagination that must not split a multi-byte
+    UTF-8 sequence. Mixes scripts most likely to break naive byte handling:
+      - Arabic (RTL, shaped/joined glyphs, presentation forms)
+      - Hebrew (RTL, niqqud combining marks)
+      - Chinese (3-byte UTF-8 CJK)
+      - Emoji + astral-plane (4-byte UTF-8 surrogate pairs)
+  -->
+  <p id="arabic" dir="rtl" lang="ar">مرحبا بالعالم — هذا اختبار للنص العربي مع علامات التشكيل: السَّلَامُ عَلَيْكُمْ</p>
+  <p id="chinese" lang="zh">你好，世界。这是一段用于测试的中文文本，包含标点符号：，。！？</p>
+  <p id="hebrew" dir="rtl" lang="he">שָׁלוֹם עוֹלָם — זהו טקסט עברי לבדיקה עם ניקוד וסימני פיסוק.</p>
+  <p id="mixed">Mixed line: English ‹ العربية › 中文 ‹ עברית › and emoji 😀🌍𝕏 done.</p>
+  <p id="marker">DISTINCTIVE_MARKER_I18N_PAGE</p>
+
+  <!-- Interactive controls whose accessible names / values are non-ASCII, so the
+       snapshot and act paths round-trip them through JSON over the WebSocket. -->
+  <label for="i18n-input">الاسم الكامل / 全名 / שם מלא</label>
+  <input type="text" id="i18n-input" name="i18n-input">
+  <button type="button" id="i18n-btn">提交 / إرسال / שלח</button>
+  <div id="i18n-result"></div>
+
+  <script>
+    // Use addEventListener (NOT an inline onclick attribute): a readability pass
+    // such as Defuddle (page_read markdown) sanitizes inline on* attributes, which
+    // would silently drop an onclick handler — addEventListener survives a clone.
+    document.getElementById('i18n-btn').addEventListener('click', function () {
+      document.getElementById('i18n-result').textContent =
+        'تم：完成：בוצע:' + document.getElementById('i18n-input').value;
+    });
+  </script>
+</body>
+</html>

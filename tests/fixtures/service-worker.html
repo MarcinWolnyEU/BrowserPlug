@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>service worker fixture</title>
+<h1 id="hdr">SW fixture</h1>
+<!-- Registers a no-op Service Worker (see sw.js) served from the same loopback
+     origin — http://127.0.0.1 is a secure context, so SW registration is allowed.
+     Once the SW is active, #sw-status flips its id to #sw-ready so a navigate()
+     with wait_for="#sw-ready" can gate deterministically on an active worker. -->
+<p id="sw-status">registering…</p>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js')
+      .then(function () { return navigator.serviceWorker.ready; })
+      .then(function () {
+        var el = document.getElementById('sw-status');
+        el.textContent = 'SW_READY';
+        el.id = 'sw-ready';
+      })
+      .catch(function (e) {
+        document.getElementById('sw-status').textContent = 'SW_ERROR: ' + e;
+      });
+  } else {
+    document.getElementById('sw-status').textContent = 'NO_SW_API';
+  }
+</script>

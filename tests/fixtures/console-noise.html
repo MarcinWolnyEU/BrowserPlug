@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Console Noise Fixture</title>
+</head>
+<body>
+  <h1>Console noise fixture</h1>
+  <p>Emits warn/error/uncaught-throw at load; button logs on click.</p>
+  <button id="logbtn" type="button">Log on click</button>
+
+  <script>
+    console.warn('load-warning A');
+    console.error('load-error B');
+  </script>
+
+  <!-- Uncaught throw in its OWN script block so the next block still runs -->
+  <script>
+    throw new Error('thrown-error C');
+  </script>
+
+  <script>
+    document.getElementById('logbtn').addEventListener('click', function () {
+      console.log('click-log D');
+    });
+  </script>
+</body>
+</html>

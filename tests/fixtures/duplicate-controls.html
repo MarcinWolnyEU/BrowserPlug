@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Duplicate Controls Fixture</title>
+</head>
+<body>
+  <h1>Duplicate controls fixture</h1>
+
+  <!-- Two buttons with IDENTICAL accessible name; only the second is enabled.
+       Targeting "Provide answers" with enabled_only must hit #real-btn. -->
+  <button type="button" id="ghost-btn" disabled>Provide answers</button>
+  <button type="button" id="real-btn"
+          onclick="document.getElementById('result').textContent='submitted'">Provide answers</button>
+  <div id="result"></div>
+
+  <!-- The same radio group rendered TWICE (e.g. top + bottom of a long form):
+       same name, same options, 6 radios total. -->
+  <fieldset id="variant-top">
+    <legend>Variant (top)</legend>
+    <label><input type="radio" name="variant_choice" value="A"> Option A</label>
+    <label><input type="radio" name="variant_choice" value="B"> Option B</label>
+    <label><input type="radio" name="variant_choice" value="C"> Option C</label>
+  </fieldset>
+  <fieldset id="variant-bottom">
+    <legend>Variant (bottom)</legend>
+    <label><input type="radio" name="variant_choice" value="A"> Option A</label>
+    <label><input type="radio" name="variant_choice" value="B"> Option B</label>
+    <label><input type="radio" name="variant_choice" value="C"> Option C</label>
+  </fieldset>
+
+  <!-- Uniquely named controls that must survive dedupe untouched -->
+  <label for="unique-search">Search the archive</label>
+  <input type="text" id="unique-search" name="unique-search">
+  <button type="button" id="unique-export">Export everything</button>
+  <a href="#help" id="unique-help">Help center</a>
+</body>
+</html>

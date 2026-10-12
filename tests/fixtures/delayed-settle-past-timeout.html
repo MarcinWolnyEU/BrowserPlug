@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Load more, slower than the step budget</title>
+<!--
+  Fixture: a "load more" whose work outlives the act step's deadline.
+
+  Clicking #load-more fires a real request and then BLOCKS the page's main thread for
+  `?block=<ms>` (default 3000). The injected automation call cannot return while the
+  handler is running, which is the same shape as the live failure (a click whose
+  navigation tears down the document the toolkit was injected into): the step's
+  promise does not settle inside its budget.
+
+  The point of the fixture is what happens NEXT. The step must come back as a
+  STRUCTURED timeout carrying the tab's url/title/status and the network digest — so
+  "timed out" can be told apart from "nothing happened" — and the extra 20 items must
+  in fact be there afterwards, proving the action DID take effect. That is the exact
+  case the bare "Request timed out after 22.1 seconds" got wrong every time.
+
+  ?block=0 disables the stall, for the control case (same page, fast click).
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  #items li { padding: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Dyski zewnetrzne</h1>
+<button type="button" id="load-more">Pokaz wiecej produktow</button>
+<p>Loaded: <span id="count">20</span></p>
+<ul id="items"></ul>
+
+<script>
+  var params = new URLSearchParams(location.search);
+  var BLOCK_MS = params.has('block') ? parseInt(params.get('block'), 10) : 3000;
+
+  function render(n) {
+    var ul = document.getElementById('items');
+    ul.innerHTML = '';
+    for (var i = 0; i < n; i++) {
+      var li = document.createElement('li');
+      li.textContent = 'Dysk ' + (i + 1);
+      ul.appendChild(li);
+    }
+    document.getElementById('count').textContent = String(n);
+  }
+  render(20);
+
+  document.getElementById('load-more').addEventListener('click', function () {
+    // A real request first: the timeout report's network digest is what tells
+    // "slow but working" apart from "the click landed on nothing".
+    try { fetch('titled.html?more=1', { cache: 'no-store' }); } catch (e) { /* ignore */ }
+    var until = Date.now() + BLOCK_MS;
+    while (Date.now() < until) { /* hold the main thread past the step budget */ }
+    render(40);
+  });
+</script>
+</body>
+</html>

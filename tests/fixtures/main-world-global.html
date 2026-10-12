@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Main World Global Fixture</title>
+</head>
+<body>
+  <h1>Main world global fixture</h1>
+  <p>A page script sets window.__probe / window.__probeObj — visible only from the MAIN world.</p>
+  <script>
+    window.__probe = 'main-world-value';
+    window.__probeObj = { a: 1, b: [2, 3] };
+  </script>
+</body>
+</html>

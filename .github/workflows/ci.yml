@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # release.yml calls this workflow, so nothing is released from a commit that fails it.
+  workflow_call:
+    inputs:
+      release:
+        description: Called from the release workflow (skips the throwaway package upload).
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
+# The integration suite drives real Firefox and Chromium windows and stays out of CI
+# (.tmp/dev-docs/ci-release.md). This workflow runs everything that needs no browser.
+jobs:
+  static:
+    name: Static gate, parity and JS tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.18"
+          python-version: "3.12"
+      # jsdom 30 needs Node 22.22.2 or 24.15.0 and later; the runner image ships an older one.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - name: Ruff static gate
+        run: uv run --locked --script tests/run.py --ruff check server launcher shared-py tests scripts
+      - name: Shared extension files are byte-identical in both trees
+        run: uv run --script tests/parity/sync_common.py --check
+      - name: Parity invariants
+        run: uv run --locked --script tests/run.py parity/ -q
+      - name: Version carriers agree
+        run: uv run --script scripts/check_release_version.py
+      # package.json has no lockfile on purpose: jsdom is a floor, not a pin.
+      - name: Install the JS test tooling
+        run: npm install --no-audit --no-fund --ignore-scripts
+      - name: JS tests
+        run: npm run test:js
+      - name: Lint workflows
+        run: uvx --from actionlint-py==1.7.12.25 actionlint
+
+  # Windows only: the dev box is Windows and the server runs there under two processes
+  # (AGENTS.md, "How it runs"). The suite is unverified on Linux, so no Linux cell yet.
+  unit:
+    name: Unit and parity tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.18"
+          python-version: "3.12"
+      - name: Unit and parity suites
+        run: uv run --locked --script tests/run.py -q
+
+  build:
+    name: Build the extension and server packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.18"
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - run: uv run --script build_xpi.py
+      - run: uv run --script build_source_zip.py
+      - run: uv run --script build_server_zip.py
+      # The AMO validator, at the bar .tmp/dev-docs/firefox-release.md sets: no errors, no
+      # warnings and no notices. --warnings-as-errors cannot gate notices, so the summary is
+      # checked directly. Pinned by hand; Dependabot does not read npx arguments.
+      - name: Lint the Firefox package with addons-linter
+        run: |
+          npx --yes addons-linter@10.14.0 --output json --boring \
+            "dist/firefox/browserplug@marcinwolny.net.xpi" > addons-linter.json
+          jq '.summary' addons-linter.json
+          jq -e '.summary == {"errors": 0, "notices": 0, "warnings": 0}' addons-linter.json
+      # The server zip is what a user unpacks and runs: the launcher must import from the
+      # unpacked tree alone (standard library plus shared-py), every module must compile, and
+      # the launcher must report the version the extensions carry.
+      - name: Smoke-test the server package from an unpacked copy
+        run: |
+          unpacked="$(mktemp -d)"
+          uv run --no-project python -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            dist/packages/browserplug-server.zip "${unpacked}"
+          uv run --no-project python -I -m compileall -q "${unpacked}/server-package"
+          expected="$(jq -r .version package.json)"
+          found="$(cd "${unpacked}" && uv run --no-project python -I -c 'import sys; sys.path.insert(0, "server-package"); import launcher.launcher as m; print(m.BROWSERPLUG_VERSION)')"
+          echo "launcher ${found}, package.json ${expected}"
+          test "${found}" = "${expected}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !inputs.release }}
+        with:
+          name: ci-dist
+          path: |
+            dist/firefox/*.xpi
+            dist/firefox/browserplug-source-*.zip
+            dist/chrome/*.zip
+            dist/packages/browserplug-server.zip
+          if-no-files-found: error
+
+  ci-ok:
+    name: CI passed
+    if: always()
+    needs: [static, unit, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Variant-grouped product cards</title>
+<!--
+  Fixture: a product grid whose ground truth is known ahead of time.
+
+  Reproduces the exact live failure: card #2 embeds a capacity switcher, so it holds
+  TWO live prices whose DOM nodes sit NEAR (not inside) the title anchor. A naive
+  querySelectorAll('h2 a') + querySelectorAll('.price') zipped by index attributes
+  1199,00 to "WD My Book 14TB" whose real price is 1829,74 — plausible, and wrong.
+
+  Also covered here:
+    - card #4 has a struck-through "was" price, which must NOT read as a variant
+      conflict (it is an old price, not a competing one);
+    - card #5's link is a tracking redirector wrapping the canonical product URL;
+    - "14TB"/"128 reviews" are bare numbers that must never be harvested as money.
+
+  GROUND TRUTH (kept in one place so tests can assert against it):
+    0  Seagate Expansion 8TB       799,00 zl
+    1  Toshiba Canvio 6TB          649,99 zl
+    2  WD My Book 14TB             AMBIGUOUS: 1829,74 and 1199,00
+    3  Seagate IronWolf 4TB        1 199,00 zl   (space-grouped thousands)
+    4  WD Elements 12TB            1099,00 zl, was 1499,00 zl (struck)
+    5  WD Elements Desktop 14TB    1849,00 zl, link unwraps to /oferta/wd-elements-14tb
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
+  .card h2 { font-size: 15px; margin: 0 0 6px; }
+  .now { font-weight: 700; }
+  .was { text-decoration: line-through; color: #888; }
+  .variants button { margin-right: 4px; }
+  nav a { margin-right: 8px; }
+</style>
+</head>
+<body>
+<h1>Dyski zewnetrzne HDD</h1>
+
+<!-- Decoy: a nav strip of repeated links. Same-shaped siblings, but no prices and
+     almost no text — a detector that grabs "the first repeated group" lands here. -->
+<nav>
+  <a href="/c/1">Dyski</a><a href="/c/2">SSD</a><a href="/c/3">Obudowy</a><a href="/c/4">Kable</a>
+</nav>
+
+<div class="grid" id="grid">
+
+  <article class="card">
+    <a href="/oferta/seagate-expansion-8tb"><h2>Seagate Expansion 8TB</h2></a>
+    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="Seagate Expansion 8TB">
+    <p class="meta">8TB &middot; USB 3.0 &middot; <span class="reviews">128 reviews</span></p>
+    <div class="prices"><span class="now">799,00 z&#x142;</span></div>
+  </article>
+
+  <article class="card">
+    <a href="/oferta/toshiba-canvio-6tb"><h2>Toshiba Canvio 6TB</h2></a>
+    <p class="meta">6TB &middot; USB 3.2 &middot; <span class="reviews">64 reviews</span></p>
+    <div class="prices"><span class="now">649,99 z&#x142;</span></div>
+  </article>
+
+  <!-- THE ONE THAT BREAKS ZIP-BY-INDEX: two live prices, one card. -->
+  <article class="card" id="variant-card">
+    <a href="/oferta/wd-my-book-14tb"><h2>WD My Book 14TB</h2></a>
+    <p class="meta">14TB &middot; USB 3.0</p>
+    <div class="variants">
+      <button type="button" data-cap="8">8TB</button>
+      <button type="button" data-cap="14" aria-pressed="true">14TB</button>
+    </div>
+    <div class="prices"><span class="now">1829,74 z&#x142;</span></div>
+    <div class="variant-price"><span>1199,00 z&#x142;</span></div>
+  </article>
+
+  <article class="card">
+    <a href="/oferta/seagate-ironwolf-4tb"><h2>Seagate IronWolf 4TB</h2></a>
+    <p class="meta">4TB &middot; NAS</p>
+    <div class="prices"><span class="now">1&#xa0;199,00 z&#x142;</span></div>
+  </article>
+
+  <article class="card">
+    <a href="/oferta/wd-elements-12tb"><h2>WD Elements 12TB</h2></a>
+    <p class="meta">12TB &middot; USB 3.0</p>
+    <div class="prices"><del class="was">1499,00 z&#x142;</del><span class="now">1099,00 z&#x142;</span></div>
+  </article>
+
+  <article class="card">
+    <a href="/events/clicks?emission_unit_id=abc123&amp;redirect=%2Foferta%2Fwd-elements-14tb%3Fbi_s%3Dads">
+      <h2>WD Elements Desktop 14TB</h2></a>
+    <p class="meta">14TB &middot; sponsored</p>
+    <div class="prices"><span class="now">1849,00 z&#x142;</span></div>
+  </article>
+
+</div>
+</body>
+</html>

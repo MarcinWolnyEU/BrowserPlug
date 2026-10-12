@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cards with per-card generated class names</title>
+<!--
+  Fixture: forces the SECOND grouping key, which nothing else exercises.
+
+  Detection groups a container's children two ways: by tag+class, and by
+  tag+child-tag-signature. On every other fixture the cards share a class, so the
+  first key wins and the fallback is dead code that happens to be present.
+
+  CSS-in-JS build pipelines (and Allegro/x-kom in practice) mint a DIFFERENT hashed
+  class per card. Under the first key every card lands in its own bucket of one and
+  the group is discarded; only the structural signature recovers the pattern. If the
+  fallback ever regresses, this page is the one that stops returning rows.
+
+  GROUND TRUTH: 8 cards, all priced, no two sharing a class.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  #grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  #grid > div { border: 1px solid #ccc; border-radius: 8px; padding: 10px; }
+  h2 { font-size: 14px; margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<h1>Dyski SSD</h1>
+<div id="grid">
+  <div class="_9c44d_3pyzl"><a href="/p/1"><h2>Samsung 990 PRO 2TB</h2></a><span class="_a11f2_qq">1049,00 z&#x142;</span></div>
+  <div class="_4b7e1_zk20x"><a href="/p/2"><h2>WD Black SN850X 2TB</h2></a><span class="_c93aa_ml">999,00 z&#x142;</span></div>
+  <div class="_e02cc_1vv8m"><a href="/p/3"><h2>Crucial T500 2TB</h2></a><span class="_77b1e_pz">829,00 z&#x142;</span></div>
+  <div class="_18aa9_0qk3r"><a href="/p/4"><h2>Kingston KC3000 2TB</h2></a><span class="_5d0c4_wt">899,00 z&#x142;</span></div>
+  <div class="_bb731_x9lqz"><a href="/p/5"><h2>Seagate FireCuda 530 2TB</h2></a><span class="_2ef88_hj">1129,00 z&#x142;</span></div>
+  <div class="_6f0d2_m4tsa"><a href="/p/6"><h2>Lexar NM790 2TB</h2></a><span class="_90aa1_rb">699,00 z&#x142;</span></div>
+  <div class="_ca55b_7nz1e"><a href="/p/7"><h2>Corsair MP600 PRO 2TB</h2></a><span class="_31dd7_vc">949,00 z&#x142;</span></div>
+  <div class="_37e9f_kd82u"><a href="/p/8"><h2>Adata Legend 960 2TB</h2></a><span class="_ab204_gy">779,00 z&#x142;</span></div>
+</div>
+</body>
+</html>

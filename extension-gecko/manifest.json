@@ -1,0 +1,75 @@
+{
+  "manifest_version": 2,
+  "name": "BrowserPlug",
+  "version": "1.0.0",
+  "description": "Browser extension that exposes data and functions to MCP clients via WebSocket",
+  "author": "Marcin Wolny",
+  "homepage_url": "https://github.com/MarcinWolnyEU/browserplug",
+  "default_locale": "en",
+  "icons": {
+    "48": "icons/app/icon-48.png",
+    "96": "icons/app/icon-96.png",
+    "128": "icons/app/icon-128.png"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "menus",
+    "webRequest",
+    "webRequestBlocking",
+    "webNavigation",
+    "clipboardWrite",
+    "<all_urls>"
+  ],
+  "optional_permissions": [
+    "proxy"
+  ],
+  "background": {
+    "scripts": ["vendor/period-history.js", "vendor/anthropic-data.js", "vendor/openai-data.js", "vendor/copilot-data.js", "vendor/kilocode-modelnames-data.js", "vendor/usage-sampler.js", "toolbar-icon.js", "connection-journal.js", "vendor/mlkem.js", "ws-crypto.js", "body-censor.js", "token-trust.js", "background.js"],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "BrowserPlug",
+    "default_icon": {
+      "16": "icons/toolbar/light/connecting/icon-16.png",
+      "24": "icons/toolbar/light/connecting/icon-24.png",
+      "32": "icons/toolbar/light/connecting/icon-32.png",
+      "48": "icons/toolbar/light/connecting/icon-48.png",
+      "64": "icons/toolbar/light/connecting/icon-64.png"
+    }
+  },
+  "sidebar_action": {
+    "default_panel": "popup/popup.html",
+    "default_title": "BrowserPlug",
+    "open_at_install": false
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browserplug@marcinwolny.net",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity",
+          "websiteActivity",
+          "websiteContent"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  }
+}

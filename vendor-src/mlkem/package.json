@@ -1,0 +1,11 @@
+{
+  "name": "browserplug-mlkem-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "license": "ISC",
+  "description": "Build input for extension-gecko/vendor/mlkem.js",
+  "dependencies": {
+    "@noble/post-quantum": "^0.7.1",
+    "esbuild": "^0.28.2"
+  }
+}

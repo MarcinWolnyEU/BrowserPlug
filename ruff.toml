@@ -1,0 +1,20 @@
+# Static gate: `ruff check server launcher shared-py tests build_xpi.py build_source_zip.py
+# build_server_zip.py gen_ws_token.py patch_defuddle.py` (`make lint`; .tmp/dev-docs/testing.md).
+# tests/unit/test_static_analysis.py runs it on server/, launcher/ and shared-py/ so a finding
+# fails the unit suite.
+target-version = "py311"
+extend-exclude = ["dist", "node_modules", "vendor-src", ".venv", ".tmp", "feedback1", "feedback2", "feedback3", "graft"]
+
+[lint]
+# F = pyflakes; ASYNC = blocking calls (time.sleep, subprocess, open) inside async functions.
+select = ["F", "ASYNC"]
+# ASYNC109 flags every `timeout` parameter on an async def; the codebase passes timeouts to asyncio.wait_for by design.
+ignore = ["ASYNC109"]
+
+[lint.per-file-ignores]
+# Test code may block freely, and pytest fixtures are imported then re-taken as parameters,
+# which pyflakes reports as F811.
+"tests/**" = ["ASYNC", "F811"]
+# Integration files are edited concurrently and run only in the 37-minute sweep; their
+# leftover unused locals and placeholder-less f-strings are cleanup debt and not gated.
+"tests/integration/**" = ["ASYNC", "F811", "F541", "F841"]

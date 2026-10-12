@@ -1,0 +1,357 @@
+# BrowserPlug gecko/chromium parity registry (design.md D14).
+#
+# ONE declarative source of truth read by tests/parity/test_parity.py. It records what
+# MUST correspond between extension-gecko/ (Firefox MV2) and extension-chromium/ (Chrome
+# MV3): byte-identical shared files, platform twins that legitimately diverge, chromium-only
+# additions, the JS-test twin map, integration-module engine exemptions, and the manifest
+# capability mapping. Every divergence is either MAPPED here or fails the validator.
+#
+# RULE FOR FUTURE AGENTS: when the validator fails, fix the CLASSIFICATION in this file only
+# if the divergence is design-sanctioned (design.md D5/D6/D7 gaps, the userScripts toggle,
+# the FF152 redirect model, the profile-isolation mechanism). Anything else is a real defect
+# in the ports — fix the code, not this registry. Every exemption below carries a reason=.
+
+[trees]
+gecko    = "extension-gecko"
+chromium = "extension-chromium"
+
+# ---------------------------------------------------------------------------------------
+# Invariant C — file classification. Every file in EITHER tree must be exactly one of:
+# shared (byte-identical), a platform twin (present in both, allowed to differ), or
+# platform-only (chromium_only / gecko_only). An unclassified file fails the validator.
+# ---------------------------------------------------------------------------------------
+
+[shared]
+# Byte-identical between the two trees (sha256-equal). design.md D2. Relpaths are
+# tree-relative with forward slashes. _locales/** is expanded from `globs`.
+files = [
+  "automation.js",
+  "options.html",
+  "options.js",
+  "wan-diagnosis.js",
+  "toolbar-icon.js",
+  "connection-journal.js",
+  "body-censor.js",
+  "censor-panel.js",
+  "token-trust.js",
+  "ws-crypto.js",
+  "vendor/mlkem.js",
+  "popup/popup.html",
+  "popup/popup.js",
+  "popup/popup-tabs.js",
+  "popup/usage-pane.js",
+  "popup/chromium-access.js",
+  "vendor/defuddle.js",
+  "vendor/period-history.js",
+  "vendor/usage-chart.js",
+  "vendor/anthropic-data.js",
+  "vendor/anthropic-view.js",
+  "vendor/kilocode-view.js",
+  "vendor/deepseek-view.js",
+  "vendor/openai-data.js",
+  "vendor/openai-view.js",
+  "vendor/copilot-data.js",
+  "vendor/copilot-view.js",
+  "vendor/kilocode-modelnames-data.js",
+  "vendor/usage-sampler.js",
+]
+# icons/app/*.png (the manifest "icons" art and the popup/options logos) and the two
+# toolbar glyph sets are byte-identical in both trees: both pick between the same light
+# and dark sets at runtime (toolbar-icon.js). Only the static tile is Chromium's own.
+globs = ["_locales/**/*.json", "icons/app/*.png", "icons/toolbar/*/*/*.png"]
+
+[platform_twins]
+# Present in BOTH trees, but intentionally diverge by engine (no byte-identity required).
+"background.js" = "MV2 persistent background page vs MV3 service worker; webRequest/proxy/StreamFilter/injection all differ (design.md D1/D4/D5)."
+"content.js"    = "gecko hooks the page console inline; chromium content.js is an ISOLATED-world relay of the MAIN world's __browserplugConsole events and __browserplugNetBody messages (design.md D3)."
+"manifest.json" = "manifest_version 2 vs 3; background/action/permission/host_permissions keys differ (design.md D2/D9)."
+
+[chromium_only]
+# Files that exist ONLY in extension-chromium/ (no gecko counterpart), each design-sanctioned.
+"config.js"       = "BUILD_CONFIG bake target for the test harness (null in production); the sqlite-stamp analog for MV3 (design.md D12)."
+"shim.js"         = "importScripts'd first in the SW; sets globalThis.browser = browser||chrome so shared idioms/vendor data modules run unchanged (design.md D2)."
+"scheme-probe.js" = "importScripts'd in the SW: keeps an offscreen document alive and forwards the colour scheme it reports to toolbar-icon.js setTheme(). Gecko's background page reads theme.getCurrent()/matchMedia itself."
+"offscreen.html"  = "the offscreen document (reason MATCH_MEDIA) scheme-probe.js creates; an MV3 worker has no matchMedia."
+"offscreen.js"    = "the offscreen page's script: runs matchMedia('(prefers-color-scheme: dark)') and reports it to the worker."
+"content-main.js" = "MAIN-world content script (world:MAIN, document_start): CSP-immune console hook + fetch/XHR body-capture wrapper (design.md D3/D5)."
+
+[gecko_only]
+# Files that exist ONLY in extension-gecko/, one relpath per row. None today — every
+# individually-named gecko file is shared or a platform twin. The section is intentionally
+# present so a future gecko-only file must be classified here with a reason rather than
+# silently failing exhaustiveness. Whole DIRECTORIES go in [gecko_only_globs]
+
+[chromium_only_globs]
+"icons/tile/*.png" = "the static dark TILE for the two places a browser draws the extension icon on a surface toolbar-icon.js does not control (the manifest `icons` 16 and 32 keys: chrome://extensions and the like). Rendered by assets/icons/render.py."
+
+# ---------------------------------------------------------------------------------------
+# Invariant A — action-string set parity between the two background.js.
+# ---------------------------------------------------------------------------------------
+[action_strings]
+# Minimum action strings each background.js must yield (guards a regex that matches nothing).
+# 52 is the current exact count and the floor (51 until the case regex learnt camelCase
+# verbs and found `tabs.captureVisibleTab`, which it had skipped in both trees). It was 56 until the 2026-08-03 authorized
+# removals took FIVE actions out of BOTH trees together: content.read_clipboard (0 uses in
+# 3,112 calls, and the only zero-usage capability whose retention cost a sensitive
+# permission plus, on Chromium, a whole offscreen-document subsystem), the three history.*
+# actions (the history TOOL was deleted server-side), and test.clear_test_history — a test
+# helper that existed ONLY to clean up after the history tests and whose browser.history.*
+# calls cannot work now that the permission is gone. Recompute this number when actions
+# move; never lower it to paper over a parse failure.
+floor = 52
+# Case labels present in only ONE tree, each with a reason below. Empty today: the two
+# trees expose the identical 52 actions (incl. the 8 test.* helpers).
+exempt = []
+[action_strings.reasons]
+# "area.verb" = "why this action exists in only one engine"
+
+# ---------------------------------------------------------------------------------------
+# Invariant J — every literal wire action the SERVER sends is handled by BOTH extensions.
+# The extractor (parity_lib.parse_server_sent_actions) walks server/ with `ast`.
+# ---------------------------------------------------------------------------------------
+[server_sent_actions]
+# Minimum literal actions the extractor must find (guards a parse that matches nothing).
+floor = 30
+# `<x>.request(<variable>, ...)` call sites: the extractor cannot read a variable, so each
+# one is named here with the reason its values are still covered. A new one fails until
+# it is listed, which is the prompt to check what it can send.
+[server_sent_actions.dynamic_sites]
+"server/tools/navigate.py" = "the fused read leg: the action comes from fused_read.read_plan, whose literals (content.read, content.snapshot) the extractor does read."
+
+# ---------------------------------------------------------------------------------------
+# Invariant B — __browserplugAuto method-set parity (automation.js is shared, this guards a fork).
+# ---------------------------------------------------------------------------------------
+[automation_methods]
+# Exact current count of the invokeMethod switch (snapshot/click/fill/select/check/press/
+# hover/scroll/wait_for/wait_check/page_state/inspect/rect = 13). Floor guards a vacuous
+# parse; the set-equality check across trees is the primary guard. It was 14 until the
+# 2026-08-03 removal of read_clipboard. NOTE the switch now lives in invokeMethod, declared
+# BETWEEN parity_lib's _INVOKE_START ("self.invoke = async function") and _INVOKE_END
+# ("window.__browserplugAuto = self;") — move it outside that window and this parses 0 methods.
+floor = 13
+
+# ---------------------------------------------------------------------------------------
+# Invariant D — disposition of every JS test. Exhaustive in BOTH directions:
+#   - every tests/js/*.test.mjs is classified in [js_tests.gecko]
+#   - every tests/js-chromium/*.test.mjs is classified in [js_tests.chromium]
+# scope ∈ {shared, twin, gecko_only, chromium_only}. See design.md D13.
+# ---------------------------------------------------------------------------------------
+[js_tests.gecko]
+"automation.test.mjs"               = { scope = "shared" }
+"records.test.mjs"                  = { scope = "shared", note = "page_snapshot mode=\"records\": repeated-card detection + per-card field scoping + variant ambiguity. Slices nothing — it drives the SHARED automation.js under jsdom, so one run covers both trees." }
+"click-state.test.mjs"              = { scope = "shared", note = "click state confirmation (control checked-before/after, dangling label[for], collapsed ancestor). Drives the SHARED automation.js under jsdom, so one run covers both trees." }
+"perception-extras.test.mjs"        = { scope = "shared" }
+"kilocode-view.test.mjs"            = { scope = "shared" }
+"deepseek-view.test.mjs"            = { scope = "shared" }
+"anthropic-view.test.mjs"           = { scope = "shared" }
+"anthropic-data.test.mjs"           = { scope = "shared" }
+"openai-view.test.mjs"              = { scope = "shared" }
+"openai-data.test.mjs"              = { scope = "shared" }
+"copilot-view.test.mjs"             = { scope = "shared" }
+"copilot-data.test.mjs"             = { scope = "shared" }
+"kilocode-modelnames-data.test.mjs" = { scope = "shared" }
+"options.test.mjs"                  = { scope = "shared" }
+"body-censor.test.mjs"              = { scope = "shared", note = "the SHARED body-censor.js behind Options > General > Captured bodies: key masking per body shape (JSON walk, form, multipart, text fallback), the custom-pattern rules, the backtracking heuristic and the result marker. Drives the shared file directly, so one run covers both trees." }
+"censor-glue.test.mjs"              = { scope = "twin", note = "the glue between requests(get) and the shared body-censor.js: censorRequestBodies() and its call in handleRequestsAction, sliced out of its own tree's background.js on the request-monitoring anchors. Twin rather than shared because the glue is in background.js, a platform twin, and the two trees capture bodies by different mechanisms (StreamFilter vs the page fetch/XHR wrapper). Deleting the call turns it red while body-censor.test.mjs stays green." }
+"options-map.test.mjs"              = { scope = "shared" }
+"options-default-browser.test.mjs"  = { scope = "shared" }
+"usage-sampler.test.mjs"            = { scope = "twin", note = "the background clock behind the \"Query every N min\" checkbox: the SHARED vendor/usage-sampler.js (arm/disarm, the alarms.get guard against a cold start restarting the schedule, alarm dispatch) AND the arming glue, sliced out of its own tree's background.js on the provider-usage-settings anchors. Twin rather than shared because the glue is in background.js, a platform twin, and the cold-start hazard the guard exists for is an MV3 one." }
+"toolbar-icon.test.mjs"             = { scope = "twin", note = "the shared toolbar-icon.js (state x theme -> icon paths) AND the arming glue: it slices updateActionIndicator out of its own tree's background.js and asserts each connection phase reaches apply() with the right state. Twin rather than shared because the two engines resolve the theme differently — gecko has theme.getCurrent()/matchMedia, the MV3 worker has neither." }
+"popup.test.mjs"                    = { scope = "shared", note = "popup/* are byte-identical; the test also slices background.js (updateActionIndicator..setConnectionPhase), a diverging file — those anchors are cross-checked in BOTH trees by invariant E." }
+"popup-tabs.test.mjs"               = { scope = "shared", note = "the popup's tab strip (popup/popup-tabs.js): restore from storage.local, click and arrow-key switching, the onShow report. Drives the SHARED file against the real popup.html under jsdom." }
+"usage-pane.test.mjs"               = { scope = "shared", note = "the popup's Usage tab (popup/usage-pane.js): one card per provider in every state, drawn from the SHARED view modules under jsdom with a fixed clock." }
+"chromium-access.test.mjs"        = { scope = "shared", note = "the popup's Allow user scripts card and the \"scripts are blocked\" status link (popup/chromium-access.js): the shared popup run under jsdom as Chromium (a chrome global, no browser) and as Firefox." }
+"connection.test.mjs"               = { scope = "twin" }
+"tokenbootstrap.test.mjs"           = { scope = "twin" }
+"identity.test.mjs"                 = { scope = "twin" }
+"journal.test.mjs"                  = { scope = "twin", note = "the connection journal and the cached hello: the SHARED connection-journal.js (ring cap, storage write-through, the since-last-hello window, the 120-char reason cap, the startup load a force-killed browser leaves behind) AND the glue, sliced out of its own tree's background.js on the connection-block anchors. Twin rather than shared because the glue is in background.js, a platform twin, and the two trees build the cached hello from different identity sources and load the shared file by different mechanisms (background.scripts vs importScripts)." }
+"actwait.test.mjs"                  = { scope = "twin" }
+"observability.test.mjs"            = { scope = "twin" }
+"neterror.test.mjs"                 = { scope = "twin" }
+"requests-capture.test.mjs"         = { scope = "twin" }
+"acttimeout.test.mjs"               = { scope = "twin" }
+"fileaccess.test.mjs"               = { scope = "twin" }
+"fileurl.test.mjs"                  = { scope = "twin", note = "fileUrlRefusal: a file:// open/navigate refusal that QUERIES the tab list instead of asserting an outcome (Firefox 153 creates no tab; an older Firefox did), and reports the READ permission as the separate, grantable thing it is. Twinned because each tree names its own toggle and its own engine reality." }
+"testgate.test.mjs"                 = { scope = "twin", note = "the test.* gate: a normal build refuses all eight actions with TEST_ACTIONS_UNSUPPORTED and runs no handler; the harness path enables them. Twinned because the gates differ on purpose: gecko reads the harness-seeded testPort+testHostname from storage.sync (its harness installs the shipped .xpi), chromium reads the baked BUILD_CONFIG.testMode." }
+"count-delta.test.mjs"              = { scope = "shared", note = "quantitative content delta, PAGE half: element-node counting in the click observer, inspect(count:) and the nodesAtStart/nodesAtEnd carrier on every invoke result. Drives the SHARED automation.js under jsdom (plus the counted-load-more fixture), so one run covers both trees." }
+"actdelta.test.mjs"                 = { scope = "twin", note = "quantitative content delta, BACKGROUND half: the before/after pairing, the quiescence poll that outlives the network-quiet settle, actZipCounts/actEffect, and the delta on a TIMED-OUT step. Reuses the existing act-deadline slice anchors." }
+"pageread.test.mjs"                 = { scope = "twin", note ="content.read window: the offset clamp, the max_chars=0 length probe, docMetrics, and the extraction cache (invalidation, no observer during an extraction, the inert-script rule). Slices runContentRead by anchor and drives the REAL driver — the gecko copy evals the code string it builds, the chromium copy invokes the func it passes." }
+"navdiag.test.mjs"                  = { scope = "twin", note ="mainFrameOutcome + navUrlBefore: main-document HTTP status, redirect stitching under BOTH redirect models, the sub-resource guard, and the pre-navigation url. Inherited the redirect/mainReq cases that observability.test.mjs used to slice out of the middle of the navigate case body." }
+"console-flush.test.mjs"            = { scope = "twin", note = "the console flush: navigate (every wait), a page_act step and its timeout report, and console.read ask the tab's relay for the entries TAB_CONSOLE may not hold yet before reading it, an entry that arrives in a batch and in the answer counts once, the digest keeps to the call's own window (navigate's also to the document that answered), and a relay that never answers is bounded and reported. Also drives its own tree's content.js under jsdom (the answer in the task that receives the request, batches still in flight carried again). Twin because the relay differs: gecko hooks the page console inline, chromium takes MAIN-world events from content-main.js." }
+"refstale.test.mjs"                 = { scope = "twin", note = "snapshot ref staleness: a failed REF lookup becomes REFS_STALE only when documentId proves the document changed. Twinned because the baseline map's lifetime differs (gecko's persistent background page vs. chromium's evictable SW memory), which is exactly the unknown-is-not-changed case." }
+"proxy.test.mjs"                    = { scope = "gecko_only", reason = "per-tab SOCKS routing rides browser.proxy.onRequest + proxyDecisionSync null-termination; chrome.proxy has no per-request hook (design.md D7). Chromium has the browser-wide equivalent in browser-proxy.test.mjs." }
+"eval-errors.test.mjs"             = { scope = "gecko_only", reason = "the page_eval wrapper (evalWrapperCode) and the retry loop that once re-ran a script whose own throw rejected tabs.executeScript, then called it an injection failure. Chromium runs code strings through userScripts.execute, which returns a script's throw as InjectionResult.error with no retry loop, and its eval path sits behind the Allow user scripts gate that no test reaches." }
+"capture-errors.test.mjs"          = { scope = "gecko_only", reason = "captureScreenshot's two paths: when captureTab and then the captureVisibleTab fallback both fail, the thrown error names both (bothCapturesFailed), and the fallback still restores the user's tab. Chromium has no captureTab, so its capture has a single path and a single error." }
+"capture-stall.test.mjs"           = { scope = "gecko_only", reason = "the Firefox capture run: a deadline under the server timeout, bounded steps, a stalled captureTab never falling through to the activating fallback, and the previous tab restored (once) when a stalled fallback is cut off. Chromium activates the tab first and has no captureTab." }
+"open-net-error.test.mjs"          = { scope = "gecko_only", reason = "failedMainFrameError: Firefox commits its own error page for a refused or reset connection and onCommitted wipes lastNavError, so tabs.create / windows.create call the open a success unless the request log is read. Chromium reports these without help (measured by tests/integration/test_open_net_error.py on both engines)." }
+
+[js_tests.chromium]
+"connection.test.mjs"       = { scope = "twin", of = "connection.test.mjs" }
+"tokenbootstrap.test.mjs"   = { scope = "twin", of = "tokenbootstrap.test.mjs" }
+"identity.test.mjs"         = { scope = "twin", of = "identity.test.mjs" }
+"journal.test.mjs"          = { scope = "twin", of = "journal.test.mjs" }
+"actwait.test.mjs"          = { scope = "twin", of = "actwait.test.mjs" }
+"observability.test.mjs"    = { scope = "twin", of = "observability.test.mjs" }
+"neterror.test.mjs"         = { scope = "twin", of = "neterror.test.mjs" }
+"requests-capture.test.mjs" = { scope = "twin", of = "requests-capture.test.mjs" }
+"censor-glue.test.mjs"      = { scope = "twin", of = "censor-glue.test.mjs" }
+"acttimeout.test.mjs"       = { scope = "twin", of = "acttimeout.test.mjs" }
+"fileaccess.test.mjs"       = { scope = "twin", of = "fileaccess.test.mjs" }
+"fileurl.test.mjs"          = { scope = "twin", of = "fileurl.test.mjs" }
+"testgate.test.mjs"         = { scope = "twin", of = "testgate.test.mjs" }
+"navdiag.test.mjs"          = { scope = "twin", of = "navdiag.test.mjs" }
+"pageread.test.mjs"         = { scope = "twin", of = "pageread.test.mjs" }
+"refstale.test.mjs"         = { scope = "twin", of = "refstale.test.mjs" }
+"actdelta.test.mjs"         = { scope = "twin", of = "actdelta.test.mjs" }
+"console-flush.test.mjs"    = { scope = "twin", of = "console-flush.test.mjs" }
+"toolbar-icon.test.mjs"     = { scope = "twin", of = "toolbar-icon.test.mjs" }
+"usage-sampler.test.mjs"    = { scope = "twin", of = "usage-sampler.test.mjs" }
+"browser-proxy.test.mjs"      = { scope = "chromium_only", reason = "the browser-WIDE SOCKS proxy: chrome.proxy has no per-request hook, so a proxy on tabs.create / navigation.navigate / tabs.routing switches the whole browser behind the popup's consent switch, since Chrome allows no optional proxy permission (gecko routes one tab, proxy.test.mjs). Covers the switch-before-load order, the fail-closed refusals, the loopback/server bypass, and the glue that undoes it by itself (socket close, watchdog, startup, install)." }
+"scheme-probe.test.mjs"      = { scope = "chromium_only", reason = "scheme-probe.js and offscreen.js exist only on Chromium: the MATCH_MEDIA offscreen document that tells the worker light or dark mode, which gecko's background page reads itself." }
+"content-relay.test.mjs"     = { scope = "chromium_only", reason = "two-realm content.js + content-main.js console/D5a net_body relay (20-entry/300ms/500-cap batching); no gecko counterpart because gecko hooks the console inline (design.md D3)." }
+
+[twins]
+# Invariant D/E — gecko test filename -> chromium twin filename (both must exist on disk,
+# gecko reading extension-gecko/, chromium reading extension-chromium/). Same basenames here.
+"connection.test.mjs"       = "connection.test.mjs"
+"tokenbootstrap.test.mjs"   = "tokenbootstrap.test.mjs"
+"identity.test.mjs"         = "identity.test.mjs"
+"journal.test.mjs"          = "journal.test.mjs"
+"actwait.test.mjs"          = "actwait.test.mjs"
+"observability.test.mjs"    = "observability.test.mjs"
+"neterror.test.mjs"         = "neterror.test.mjs"
+"requests-capture.test.mjs" = "requests-capture.test.mjs"
+"censor-glue.test.mjs"      = "censor-glue.test.mjs"
+"acttimeout.test.mjs"       = "acttimeout.test.mjs"
+"fileaccess.test.mjs"       = "fileaccess.test.mjs"
+"fileurl.test.mjs"          = "fileurl.test.mjs"
+"testgate.test.mjs"         = "testgate.test.mjs"
+"navdiag.test.mjs"          = "navdiag.test.mjs"
+"pageread.test.mjs"         = "pageread.test.mjs"
+"actdelta.test.mjs"         = "actdelta.test.mjs"
+"console-flush.test.mjs"    = "console-flush.test.mjs"
+"refstale.test.mjs"         = "refstale.test.mjs"
+"toolbar-icon.test.mjs"     = "toolbar-icon.test.mjs"
+"usage-sampler.test.mjs"    = "usage-sampler.test.mjs"
+
+# ---------------------------------------------------------------------------------------
+# Invariant G — integration modules. Every tests/integration/test_*.py must either consume
+# the parametrized server_with_extension fixture (runs BOTH engines) OR appear below with a
+# reason. Modules carrying a MODULE-LEVEL firefox_only/chromium_only marker MUST appear here
+# even though they use the fixture (the marker deselects the other engine).
+#
+# inline_engine_tests = [...] declares tests pinned to ONE engine by CONSTRUCTION — they build
+# their own <Engine>TestManager rather than taking the parametrized fixture, so they carry no
+# marker, are never "deselected", and their module can still satisfy the fixture check via its
+# other tests. Invariant G finds them by AST and requires the list to match EXACTLY (an
+# undeclared one and a stale entry both fail), so this stays honest as modules change.
+# ---------------------------------------------------------------------------------------
+[integration]
+"test_proxy_routing.py" = { engine = "firefox", scope = "module", reason = "whole-module firefox_only: per-tab SOCKS routing rides browser.proxy.onRequest, a Firefox-only model. Chromium has the browser-wide counterpart in test_browser_wide_proxy.py." }
+"test_browser_wide_proxy.py" = { engine = "chromium", scope = "module", reason = "whole-module chromium_only: chrome.proxy switches the WHOLE browser (no per-request hook), the Chromium counterpart of Firefox per-tab routing in test_proxy_routing.py. The harness bakes the popup's consent switch on." }
+"test_firefox_extension_communication.py" = { engine = "firefox", scope = "module", inline_engine_tests = ["test_extension_can_connect_to_server", "test_bidirectional_message_flow"], reason = "does not consume server_with_extension: inline FirefoxTestManager + running_server. Firefox-only connect/comms regression; chromium connect coverage comes from the parametrized modules + the harness bring-up. Only the 2 inline_engine_tests actually launch a browser; the other 4 are server-only websocket tests and are engine-neutral." }
+"test_eval_worlds.py" = { engine = "firefox", scope = "module", reason = "whole-module firefox_only: SUBJECT is page_eval running user-supplied code (isolated vs main world). page_eval is gated on chromium behind the un-grantable 'Allow user scripts' toggle -> EVAL_UNAVAILABLE headlessly (design.md D4/D12), so eval-subject tests are firefox-only." }
+"test_mcp_server_integration.py" = { engine = "firefox", scope = "module", inline_engine_tests = ["test_extension_websocket_connection", "test_full_chain_mcp_to_browser_action"], reason = "does not consume server_with_extension: inline full_mcp_system + inline FirefoxTestManager. Firefox-only; chromium full-chain coverage comes from the parametrized modules. Only the 2 inline_engine_tests launch a browser; the other 4 exercise full_mcp_system without one." }
+"test_mcp_integration.py" = { engine = "none", scope = "module", reason = "server-only: mock_websocket_server, no browser launched. Engine-neutral, runs once." }
+"test_mcp_protocol_compliance.py" = { engine = "none", scope = "module", reason = "server-only canary (pins the 9-tool surface) via coordinated_test_ports, no browser launched. Engine-neutral, runs once." }
+# Engine-bound BY CONSTRUCTION, no marker involved: the module DOES consume the parametrized
+# fixture (so the module-level check passes on its other tests), but this test builds its own
+# FirefoxTestManager and therefore never runs under chromium. invariant G detects the
+# construction via AST and requires it to be listed here.
+"test_real_firefox_communication.py" = { engine = "firefox", scope = "partial", inline_engine_tests = ["test_extension_configuration_persistence"], reason = "SUBJECT is the gecko profile-config carrier itself: it asserts the extension's settings landed in <profile>/storage-sync-v2.sqlite, which is the Firefox harness's port-seeding mechanism. Chromium seeds the equivalent through the config.js bake (design.md D11), a different mechanism covered by the chromium harness bring-up. Its other 2 non-parametrized tests launch no browser (raw websockets against BrowserPlugServer) and are engine-neutral." }
+
+# Partial (per-method) engine exemptions — the module still runs parametrized on both engines
+# for its other tests; these named methods carry a firefox_only marker. Recorded for
+# documentation; invariant G verifies each such marker call carries a reason string.
+"test_browser_functionality.py" = { engine = "firefox", scope = "partial", methods = ["test_end_to_end_content_execute_script", "test_end_to_end_tab_screenshot_capture"], reason = "content.execute page_eval needs the un-grantable 'Allow user scripts' toggle (EVAL_UNAVAILABLE headlessly); default-tab screenshot targets chrome://newtab which captureVisibleTab cannot capture (design.md D4/D6/D12)." }
+"test_request_monitoring_end_to_end.py" = { engine = "firefox", scope = "partial", methods = ["test_response_body_capture_verification", "test_body_correlation_attaches_captured_content"], reason = "document-body StreamFilter response capture is gecko-only; MV3 has no blocking webRequest body read (design.md D5). The monitor-lifecycle/request-log tests stay parametrized." }
+"test_agent_experience.py" = { engine = "firefox", scope = "partial", methods = ["test_page_eval_main_vs_isolated_world", "test_reads_reliable_across_reload_churn", "test_element_and_full_page_capture_are_one_shot"], reason = "eval-SUBJECT + one-shot-capture cases: user-supplied page_eval needs the un-grantable 'Allow user scripts' toggle (EVAL_UNAVAILABLE headlessly) and captureTab({rect}) one-shot has no MV3 equivalent — Chromium element/full_page shots scroll+stitch by design (design.md D4/D6/D12). Every OTHER agent-experience case runs on BOTH engines; their DOM VERIFICATION is engine-aware (page_read/page_snapshot/page_act on chromium) so the snapshot/act/fill/iframe/wait features are genuinely exercised under chromium." }
+"test_window_management.py" = { engine = "firefox", scope = "partial", methods = ["test_window_focus_switching"], reason = "SUBJECT is which WINDOW is focused after a tab activate. headless Chrome has no window manager, so chrome.windows.update({focused:true}) is a no-op — the focused window never changes (the chromium tabs.switch handler is a byte-faithful port that DOES call windows.update focused; the browser cannot honor it headlessly). Every other window test (create/close/move/list/bounds) runs on BOTH engines." }
+
+# ---------------------------------------------------------------------------------------
+# Invariant I — blocks that were ported to be IDENTICAL, and must stay that way.
+#
+# Most of background.js legitimately diverges (that is why it is a platform twin), but some
+# blocks are pure orchestration over engine-neutral primitives and were ported verbatim on
+# purpose. Nothing stopped the two copies drifting: invariant E only checks that a slice
+# ANCHOR still exists, not that what is between the anchors still agrees. A divergence there
+# would mean one engine quietly getting different act/timeout semantics, with both trees'
+# twin suites green (each tests its own copy).
+#
+# Comparison is over CODE lines only — blank lines and whole-line // comments are dropped —
+# so the prose may name each engine's own API. Anything else must match exactly.
+[[identical_blocks]]
+name  = "content.act step deadline + step loop"
+file  = "background.js"
+start = "// ---- content.act step deadline"
+end   = "// Content handlers"
+reason = """actStepBudget/actClampWait/actTimeoutReport/runActStepWithDeadline/runActSteps are
+pure orchestration over tabs.get + TAB_NAV + the digests — all of which exist identically on
+both engines — so the ONLY sanctioned difference is which injection API the prose names. The
+timeout verdicts are agent-facing contract text; if one engine's copy drifts, an agent gets a
+different answer to the same failure depending on which browser it happens to be driving.
+The block ALSO owns the measurement + quiescence orchestration (actMeasure /
+actCountsSame / actMeasureSettled / actZipCounts / actEffect and the before/after hooks in
+runActSteps). That makes its code-identity load-bearing in a new way: the count and node
+deltas it produces are NUMBERS the agent reads back, so a drift means the same page answers
+"+8 rows" on one engine and "no change" on the other."""
+
+[[identical_blocks]]
+name  = "navigation landing diagnostics"
+file  = "background.js"
+start = "// ---- navigation landing diagnostics"
+end   = "async function handleNavigationAction("
+reason = """mainFrameOutcome/navUrlBefore are pure reads over TAB_REQUESTS + tabs.get, both of
+which exist identically on either engine (MV3's observe-only webRequest still delivers
+onCompleted.statusCode). The facts they collect — the main document's HTTP status and the
+pre-navigation URL — are what the server turns into agent-facing correctness warnings; if one
+tree's copy drifts, an agent gets a different answer about whether it landed where it asked
+depending on which browser it happens to be driving. The two redirect MODELS differ (gecko
+replaces the channel, chromium keeps one requestId) but the backwards scan is correct under
+both, so each tree words that note on its own comment line and the code stays identical."""
+
+# ---------------------------------------------------------------------------------------
+# Invariant F — manifest capability correspondence, and Invariant H — version lockstep.
+# ---------------------------------------------------------------------------------------
+[manifest]
+gecko_manifest_version    = 2
+chromium_manifest_version = 3
+
+[manifest.gecko_permissions]
+# Every entry in extension-gecko/manifest.json "permissions" + "optional_permissions".
+# chromium = the MV3 permission it maps to, or "absent" (dropped by design, with a reason),
+# or "host_permissions" (moved out of the permissions array in MV3).
+tabs               = { chromium = "tabs" }
+storage            = { chromium = "storage" }
+alarms             = { chromium = "alarms" }
+menus              = { chromium = "contextMenus", reason = "MV3 renamed the menus permission to contextMenus." }
+webRequest         = { chromium = "webRequest", note = "observe-only in MV3 (no blocking)." }
+webRequestBlocking = { chromium = "absent", reason = "blocking webRequest was removed in MV3; the StreamFilter/Accept-Encoding body-capture path is gecko-only (design.md D5)." }
+webNavigation      = { chromium = "webNavigation" }
+clipboardWrite     = { chromium = "clipboardWrite", note = "the popup/options copy buttons; clipboardRead was dropped 2026-08-03 with content.read_clipboard." }
+"<all_urls>"       = { chromium = "host_permissions", reason = "MV3 moves host match patterns from permissions to host_permissions (design.md D9)." }
+proxy              = { chromium = "proxy", note = "optional on gecko, REQUIRED on chromium: Chrome rejects proxy under optional_permissions (\"cannot be listed as optional\"). Per-tab routing is impossible on Blink (chrome.proxy is global-only), so the permission backs the browser-wide proxy, which stays off until the user turns on the popup switch (.tmp/dev-docs/proxy-connections.md)." }
+
+[manifest.chromium_additions]
+# Chromium permissions with NO gecko counterpart — each an intentional MV3 addition.
+scripting   = "chrome.scripting.executeScript replaces gecko's tabs.executeScript for injecting automation.js / defuddle.js and fixed-function page probes (design.md D4)."
+userScripts = "chrome.userScripts.execute runs page_eval user-supplied code in USER_SCRIPT/MAIN world; MV3 removed tabs.executeScript(code) (design.md D4)."
+sidePanel   = "the MV3 side_panel API requires the sidePanel permission (gecko's sidebar_action needs none)."
+offscreen   = "chrome.offscreen hosts the MATCH_MEDIA document scheme-probe.js uses to learn light or dark mode, which a service worker cannot read; gecko's background page has matchMedia itself. Raises no install warning."
+
+[manifest.chromium_host_additions]
+# host_permissions entries beyond <all_urls> (which is accounted for by the gecko <all_urls> row).
+"http://127.0.0.1/*" = "explicit loopback host permission for the /ws-token bootstrap fetch; gecko reaches it via <all_urls> (design.md D9)."
+"http://localhost/*" = "explicit loopback host permission for the /ws-token bootstrap fetch; gecko reaches it via <all_urls> (design.md D9)."
+
+[manifest.key_mapping]
+# Non-permission top-level manifest keys that differ by engine (each accounted for).
+background  = { gecko = "background.scripts+persistent", chromium = "background.service_worker", reason = "MV2 persistent background page vs MV3 service worker (design.md D1)." }
+action      = { gecko = "browser_action", chromium = "action", reason = "MV3 renamed browser_action to action." }
+side_panel  = { gecko = "sidebar_action", chromium = "side_panel", reason = "MV3 replaces sidebar_action with side_panel." }
+gecko_id    = { gecko = "browser_specific_settings.gecko.id", chromium = "absent", reason = "chromium loads unpacked / by key; there is no gecko application id." }
+data_consent = { gecko = "browser_specific_settings.gecko.data_collection_permissions", chromium = "absent", reason = "Firefox's built-in data-collection consent prompt; AMO REQUIRES the key for new submissions (addons-linter errors without it). Chrome has no manifest equivalent — the Web Store declares data use in the listing, not the manifest." }
+android     = { gecko = "browser_specific_settings.gecko_android", chromium = "absent", reason = "the gecko_android object is what makes AMO sign the XPI as Firefox-for-Android compatible; omit it and the signed build is desktop-only. It carries its own strict_min_version (142.0) because data_collection_permissions reached Android in 142, and an empty object inherits desktop's 140, which addons-linter reports (KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION). Chromium on Android loads no extensions at all, so there is nothing to map." }
+csp         = { gecko = "absent", chromium = "content_security_policy", reason = "MV3 requires an explicit extension_pages CSP; MV2 uses a permissive default." }
+icons       = { gecko = "icons + browser_action.default_icon", chromium = "icons + action.default_icon", reason = "same key names. Both default_icon entries name the LIGHT glyph set, which toolbar-icon.js corrects a tick later once the theme (Firefox) or the offscreen probe (Chromium) has answered. Chromium's small icons sizes use the static dark tile, drawn for a 16 px slot." }
+min_version = { gecko = "absent", chromium = "minimum_chrome_version", reason = "declares Chrome 138+ for the userScripts gate (design.md D4)." }

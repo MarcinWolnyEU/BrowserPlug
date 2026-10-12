@@ -1,0 +1,20 @@
+version: 2
+# Dependabot keeps the action SHA pins and the package.json range current. It cannot read the
+# PEP 723 blocks and locks beside server/server.py and tests/run.py, so those are updated by
+# hand (.tmp/dev-docs/dependencies.md). So are the tool versions pinned inside the workflows:
+# uv, actionlint, addons-linter, pip-audit and gitleaks.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      js-test-tooling:
+        patterns: ["*"]

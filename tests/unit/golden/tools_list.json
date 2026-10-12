@@ -1,0 +1,3816 @@
+{
+ "default": {
+  "order": [
+   "tabs",
+   "navigate",
+   "page_read",
+   "page_snapshot",
+   "page_act",
+   "page_eval",
+   "page_screenshot",
+   "requests",
+   "server_info"
+  ],
+  "params": {
+   "navigate": [
+    "tab_id",
+    "action",
+    "wait",
+    "wait_for",
+    "timeout_ms",
+    "bypass_cache",
+    "read",
+    "read_scope",
+    "read_max_chars",
+    "url"
+   ],
+   "page_act": [
+    "steps",
+    "tab_id",
+    "frame_id"
+   ],
+   "page_eval": [
+    "code",
+    "tab_id",
+    "world",
+    "frame_id"
+   ],
+   "page_read": [
+    "tab_id",
+    "url",
+    "format",
+    "scope",
+    "max_chars",
+    "offset",
+    "frame_id"
+   ],
+   "page_screenshot": [
+    "tab_id",
+    "full_page",
+    "selector",
+    "format",
+    "quality",
+    "settle_ms"
+   ],
+   "page_snapshot": [
+    "tab_id",
+    "mode",
+    "root",
+    "max_elements",
+    "include_hidden",
+    "frame_id",
+    "item_selector"
+   ],
+   "requests": [
+    "action",
+    "tab_id",
+    "filter",
+    "limit",
+    "url_patterns",
+    "monitor_id",
+    "request_id",
+    "options",
+    "include_binary"
+   ],
+   "server_info": [
+    "verbose"
+   ],
+   "tabs": [
+    "action",
+    "background",
+    "recent",
+    "tab_id",
+    "window_id",
+    "new_window",
+    "incognito",
+    "pinned",
+    "focus_window",
+    "state",
+    "width",
+    "height",
+    "url"
+   ]
+  },
+  "signature": "5ab251b5e806",
+  "tools": [
+   {
+    "description": "Load url in a tab, or go back, forward or reload, and wait until the page is ready. Reports the final URL and title, failed requests, console errors and Service Worker registrations",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "goto",
+       "description": "goto, back, forward or reload",
+       "type": "string"
+      },
+      "bypass_cache": {
+       "default": false,
+       "description": "reload only",
+       "type": "boolean"
+      },
+      "read": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "also return the page in this call: markdown (main content), text, html or records (one row per listing card). A failed, timed-out, superseded or off-site navigation returns the failure, not content"
+      },
+      "read_max_chars": {
+       "default": 20000,
+       "description": "character cap for the read",
+       "type": "integer"
+      },
+      "read_scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector scoping the read, as page_read scope"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "timeout_ms": {
+       "default": 20000,
+       "description": "settle budget in ms",
+       "type": "integer"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for goto, the default action: the address to load, with scheme"
+      },
+      "wait": {
+       "default": "settled",
+       "description": "settled: committed, loaded, no request in flight, 250 ms of network quiet. dom: load, then DOM unchanged for 100 ms, max 3 s; a page that fetches content after load may return as a skeleton. load: load event only. none: return now",
+       "type": "string"
+      },
+      "wait_for": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector that must also be present before returning"
+      }
+     },
+     "type": "object"
+    },
+    "name": "navigate"
+   },
+   {
+    "description": "Run interaction steps on a page in one call. Steps run in order and stop at the first failure unless a step sets continue_on_error. A login is one call: fill #email, click Log in, then wait for url_contains /dashboard. Each step reports what it changed (DOM, URL, dialog), the network requests it triggered and console errors. fill drives React and Vue controlled inputs and select elements",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "act inside this iframe"
+      },
+      "steps": {
+       "items": {
+        "properties": {
+         "action": {
+          "description": "click, fill, select, check, press, hover, scroll or wait",
+          "type": "string"
+         },
+         "continue_on_error": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "run later steps even if this one fails"
+         },
+         "count": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "CSS selectors to count before and after this step, to see whether a click loaded more"
+         },
+         "enabled_only": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match enabled elements"
+         },
+         "gone": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until target, text or url is ABSENT"
+         },
+         "nth": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "0-based pick when several elements match"
+         },
+         "predicate": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: JS boolean expression, isolated world"
+         },
+         "require_visible": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: the selector must be visible, not just present"
+         },
+         "role": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ARIA role filter for a text target, such as button or link"
+         },
+         "settle_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ms to settle after the step, default 600 for click, else 0"
+         },
+         "submit": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill: press Enter after setting the value"
+         },
+         "target": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "snapshot ref such as e5, CSS selector or accessible-name text, tried in that order. wait: the CSS selector to wait for"
+         },
+         "text_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until page text contains this"
+         },
+         "timeout_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: max ms, default 10000"
+         },
+         "url_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until the URL contains this"
+         },
+         "value": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill, select: the value; a checkbox takes true or false. check: true or false. press: a key such as Enter or Escape. scroll: top, bottom or a pixel offset"
+         },
+         "watch": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "targets whose visible, enabled and value state to report before and after this step"
+         },
+         "within": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match inside this ref or CSS selector"
+         }
+        },
+        "required": [
+         "action"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "required": [
+      "steps"
+     ],
+     "type": "object"
+    },
+    "name": "page_act"
+   },
+   {
+    "description": "Run JavaScript in a tab and return the value of the last expression; a returned Promise is awaited. isolated world: full DOM access, immune to page CSP, but page JS globals and the expandos page scripts set on DOM nodes (React fiber keys, __vue internals) are invisible; on Firefox read globals via window.wrappedJSObject. main world: the page's own world, which sees everything; a strict page CSP can block it, and the result says so",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "JavaScript to run"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "run inside this iframe"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "world": {
+       "default": "isolated",
+       "description": "isolated or main",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_eval"
+   },
+   {
+    "description": "Read a page's content. markdown extracts the main content with Defuddle, stripping navigation, ads and page chrome and keeping title, site and author; it falls back to plain text if extraction fails",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "markdown",
+       "description": "markdown, text or html",
+       "type": "string"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "iframe to read; page_snapshot and an empty read list the ids"
+      },
+      "max_chars": {
+       "default": 20000,
+       "description": "characters per call; continue with offset",
+       "type": "integer"
+      },
+      "offset": {
+       "default": 0,
+       "description": "continue reading from this character offset",
+       "type": "integer"
+      },
+      "scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector. markdown: treat this subtree as the main content; text, html: read only this subtree"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "navigate here first, then read, in one call, same as navigate with read=format; uses tab_id, else the active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_read"
+   },
+   {
+    "description": "Capture a tab as an inline image with a short text summary. Firefox captures background tabs without taking focus, except a page left with no layout (0x0) by a minimized or background window; Chromium briefly activates the tab. Each shot first waits briefly for web fonts, image decode and a quiet animation frame",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "png",
+       "description": "png or jpeg",
+       "type": "string"
+      },
+      "full_page": {
+       "default": false,
+       "description": "capture the entire scrollable page",
+       "type": "boolean"
+      },
+      "quality": {
+       "default": 90,
+       "description": "JPEG quality, 1 to 100",
+       "type": "integer"
+      },
+      "selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "capture one element by snapshot ref, CSS selector or visible text, cropped to its box; overrides full_page. Zero or several matches is an error"
+      },
+      "settle_ms": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "cap in ms on the pre-shot wait, default about 1200; 0 skips it"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_screenshot"
+   },
+   {
+    "description": "Map a page's interactive elements, one line each: ref role \"name\" value/state selector. Pass a ref such as e5 or the selector as a page_act target. Runs of same-name controls collapse to one line with a count; iframes are listed at the end with their frame_ids. forms mode: radio and checkbox groups with their options and current selection, inputs with values, buttons with enabled state. records mode: one row per repeated card (product grid, search results) with title, link, prices and image, each read from inside that card. A card with more than one live price is AMBIGUOUS and lists the candidates, each with the words beside it; struck-through prices are reported separately; tracking redirects are unwrapped. With no confident pattern it refuses; then pass item_selector",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "snapshot inside this iframe"
+      },
+      "include_hidden": {
+       "default": false,
+       "description": "include hidden and off-screen elements",
+       "type": "boolean"
+      },
+      "item_selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "records only: CSS selector matching one card"
+      },
+      "max_elements": {
+       "default": 150,
+       "description": "element or record cap",
+       "type": "integer"
+      },
+      "mode": {
+       "default": "interactive",
+       "description": "interactive, forms or records",
+       "type": "string"
+      },
+      "root": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector of the subtree to map"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_snapshot"
+   },
+   {
+    "description": "See the headers and bodies a page sends: cookies, auth headers, its own XHRs. Cookie and auth header values come back <redacted>, which still shows they were sent; bodies come back raw by default. recent: the per-tab log of the last ~300 requests (method, URL, status, timing), retroactive, no monitor needed; successful static assets are hidden; no headers or bodies, those need a monitor. start: capture url_patterns such as */api/*; returns a monitor_id that expires after options.ttl_seconds. list: captured request summaries for monitor_id. get: one capture in full; request_id must belong to that monitor. Headers appear ONLY here. stop: end the monitor. get returns request_headers, response_headers, request_body and response_body, each body as {included, content, content_type, encoding, size_bytes, truncated, note}; note says why a body is missing. request_headers == {} never means none were sent; request_headers_note says why they were not captured, usually a cache hit",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "recent",
+       "description": "recent, start, stop, list or get",
+       "type": "string"
+      },
+      "filter": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: JS regex over the URL"
+      },
+      "include_binary": {
+       "default": false,
+       "description": "get: return binary bodies as base64; capture them by widening options.content_types_to_capture",
+       "type": "boolean"
+      },
+      "limit": {
+       "default": 30,
+       "description": "recent: max entries",
+       "type": "integer"
+      },
+      "monitor_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "list, get, stop: the monitor"
+      },
+      "options": {
+       "additionalProperties": true,
+       "description": "start overrides. ttl_seconds: monitor lifetime, default 10 minutes, 10s..1h. max_body_size: bytes per body, default 50000, clamped 1000..1000000; longer bodies are truncated. content_types_to_capture: default JSON and text. sensitive_headers: extra header names to redact; a display filter, not a capture filter. authorization, cookie, set-cookie and similar are always <redacted> and no argument reveals them",
+       "type": "object"
+      },
+      "request_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "get: the captured request, from list"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: the tab whose log to read, default active tab. start: capture only this tab, default all tabs"
+      },
+      "url_patterns": {
+       "description": "start, required: glob URL patterns to capture",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    },
+    "name": "requests"
+   },
+   {
+    "description": "Is BrowserPlug working? Reports the connected browsers, which one this session drives, the MCP clients on the shared server, the request-queue depth and limit, and any failed precondition with its remedy. Call it first when page tools get no response. For file:// tabs, extension_file_access.can_read_opened_file_tab says whether page_* tools can read one the user has open (a per-user toggle); can_open_file_url says whether BrowserPlug can open one: never on Firefox, on Chromium once that toggle is on",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "verbose": {
+       "default": false,
+       "description": "add the full connection dump; large, and the summary has everything diagnostic",
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    },
+    "name": "server_info"
+   },
+   {
+    "description": "Open, find, close and switch the user's browser tabs and windows. Open your own tab with tabs(action=\"open\", background=true, url=\"https://…\")",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "list",
+       "description": "list: open tabs grouped by window. active: the tab page_* tools use when tab_id is omitted. find: tabs whose URL or title contains url. open: load url in a new tab or window. close: a tab, or a whole window via window_id. activate: bring tab_id to the front. window: move, resize, minimize or maximize a window. routing: report a tab's proxy",
+       "type": "string"
+      },
+      "background": {
+       "default": false,
+       "description": "open only. Leave the user on their current tab; page_* tools drive a background tab by its id",
+       "type": "boolean"
+      },
+      "focus_window": {
+       "default": true,
+       "description": "activate and window. true raises the window; false acts without taking focus, but an unfocused or minimized window is not painted and screenshots blank",
+       "type": "boolean"
+      },
+      "height": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels, as width"
+      },
+      "incognito": {
+       "default": false,
+       "description": "open only. A private window, without the profile's cookies or logins",
+       "type": "boolean"
+      },
+      "new_window": {
+       "default": false,
+       "description": "open only. A new window instead of a tab, sharing the profile's cookies and logins",
+       "type": "boolean"
+      },
+      "pinned": {
+       "default": false,
+       "description": "open only. Pin the new tab",
+       "type": "boolean"
+      },
+      "recent": {
+       "default": true,
+       "description": "list only. true: the recently used tabs plus a count of the rest; false: every open tab",
+       "type": "boolean"
+      },
+      "state": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window only: normal, minimized, maximized or fullscreen"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "tab id from list, find or active, for activate, close and routing; routing defaults to the active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for open and find. open: the address to load, with scheme. find: a case-insensitive literal substring of a tab's URL or title; one distinctive word beats a phrase"
+      },
+      "width": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels: the new width for window, or the initial width of a new_window or incognito window; ignored when maximized or fullscreen"
+      },
+      "window_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window id from list. close: the whole window instead of one tab. window: the window to change, default the focused one. open: the window for the new tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "tabs"
+   }
+  ]
+ },
+ "proxy_granted": {
+  "order": [
+   "tabs",
+   "navigate",
+   "page_read",
+   "page_snapshot",
+   "page_act",
+   "page_eval",
+   "page_screenshot",
+   "requests",
+   "server_info"
+  ],
+  "params": {
+   "navigate": [
+    "tab_id",
+    "action",
+    "wait",
+    "wait_for",
+    "timeout_ms",
+    "bypass_cache",
+    "read",
+    "read_scope",
+    "read_max_chars",
+    "proxy",
+    "url"
+   ],
+   "page_act": [
+    "steps",
+    "tab_id",
+    "frame_id"
+   ],
+   "page_eval": [
+    "code",
+    "tab_id",
+    "world",
+    "frame_id"
+   ],
+   "page_read": [
+    "tab_id",
+    "url",
+    "format",
+    "scope",
+    "max_chars",
+    "offset",
+    "frame_id"
+   ],
+   "page_screenshot": [
+    "tab_id",
+    "full_page",
+    "selector",
+    "format",
+    "quality",
+    "settle_ms"
+   ],
+   "page_snapshot": [
+    "tab_id",
+    "mode",
+    "root",
+    "max_elements",
+    "include_hidden",
+    "frame_id",
+    "item_selector"
+   ],
+   "requests": [
+    "action",
+    "tab_id",
+    "filter",
+    "limit",
+    "url_patterns",
+    "monitor_id",
+    "request_id",
+    "options",
+    "include_binary"
+   ],
+   "server_info": [
+    "verbose"
+   ],
+   "tabs": [
+    "action",
+    "background",
+    "recent",
+    "tab_id",
+    "window_id",
+    "new_window",
+    "incognito",
+    "pinned",
+    "focus_window",
+    "state",
+    "width",
+    "height",
+    "proxy",
+    "url"
+   ]
+  },
+  "signature": "86b19cf9a96c",
+  "tools": [
+   {
+    "description": "Load url in a tab, or go back, forward or reload, and wait until the page is ready. Reports the final URL and title, failed requests, console errors and Service Worker registrations",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "goto",
+       "description": "goto, back, forward or reload",
+       "type": "string"
+      },
+      "bypass_cache": {
+       "default": false,
+       "description": "reload only",
+       "type": "boolean"
+      },
+      "proxy": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "only when the user asks for a proxy; omit it otherwise, which keeps the tab's current routing. Sets this tab's SOCKS routing before navigating: tor (the built-in Tor client; first use downloads it, allow a minute) or a socks5, socks5h, socks4 or socks4a URL such as socks5://127.0.0.1:9050. NOT supported: HTTP, HTTPS, PAC or authenticated proxies. DNS resolves at the proxy, so .onion hosts load; fail-closed. \"\" clears it. Chromium has no per-tab routing: it switches the WHOLE browser until cleared"
+      },
+      "read": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "also return the page in this call: markdown (main content), text, html or records (one row per listing card). A failed, timed-out, superseded or off-site navigation returns the failure, not content"
+      },
+      "read_max_chars": {
+       "default": 20000,
+       "description": "character cap for the read",
+       "type": "integer"
+      },
+      "read_scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector scoping the read, as page_read scope"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "timeout_ms": {
+       "default": 20000,
+       "description": "settle budget in ms",
+       "type": "integer"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for goto, the default action: the address to load, with scheme"
+      },
+      "wait": {
+       "default": "settled",
+       "description": "settled: committed, loaded, no request in flight, 250 ms of network quiet. dom: load, then DOM unchanged for 100 ms, max 3 s; a page that fetches content after load may return as a skeleton. load: load event only. none: return now",
+       "type": "string"
+      },
+      "wait_for": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector that must also be present before returning"
+      }
+     },
+     "type": "object"
+    },
+    "name": "navigate"
+   },
+   {
+    "description": "Run interaction steps on a page in one call. Steps run in order and stop at the first failure unless a step sets continue_on_error. A login is one call: fill #email, click Log in, then wait for url_contains /dashboard. Each step reports what it changed (DOM, URL, dialog), the network requests it triggered and console errors. fill drives React and Vue controlled inputs and select elements",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "act inside this iframe"
+      },
+      "steps": {
+       "items": {
+        "properties": {
+         "action": {
+          "description": "click, fill, select, check, press, hover, scroll or wait",
+          "type": "string"
+         },
+         "continue_on_error": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "run later steps even if this one fails"
+         },
+         "count": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "CSS selectors to count before and after this step, to see whether a click loaded more"
+         },
+         "enabled_only": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match enabled elements"
+         },
+         "gone": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until target, text or url is ABSENT"
+         },
+         "nth": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "0-based pick when several elements match"
+         },
+         "predicate": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: JS boolean expression, isolated world"
+         },
+         "require_visible": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: the selector must be visible, not just present"
+         },
+         "role": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ARIA role filter for a text target, such as button or link"
+         },
+         "settle_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ms to settle after the step, default 600 for click, else 0"
+         },
+         "submit": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill: press Enter after setting the value"
+         },
+         "target": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "snapshot ref such as e5, CSS selector or accessible-name text, tried in that order. wait: the CSS selector to wait for"
+         },
+         "text_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until page text contains this"
+         },
+         "timeout_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: max ms, default 10000"
+         },
+         "url_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until the URL contains this"
+         },
+         "value": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill, select: the value; a checkbox takes true or false. check: true or false. press: a key such as Enter or Escape. scroll: top, bottom or a pixel offset"
+         },
+         "watch": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "targets whose visible, enabled and value state to report before and after this step"
+         },
+         "within": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match inside this ref or CSS selector"
+         }
+        },
+        "required": [
+         "action"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "required": [
+      "steps"
+     ],
+     "type": "object"
+    },
+    "name": "page_act"
+   },
+   {
+    "description": "Run JavaScript in a tab and return the value of the last expression; a returned Promise is awaited. isolated world: full DOM access, immune to page CSP, but page JS globals and the expandos page scripts set on DOM nodes (React fiber keys, __vue internals) are invisible; on Firefox read globals via window.wrappedJSObject. main world: the page's own world, which sees everything; a strict page CSP can block it, and the result says so",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "JavaScript to run"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "run inside this iframe"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "world": {
+       "default": "isolated",
+       "description": "isolated or main",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_eval"
+   },
+   {
+    "description": "Read a page's content. markdown extracts the main content with Defuddle, stripping navigation, ads and page chrome and keeping title, site and author; it falls back to plain text if extraction fails",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "markdown",
+       "description": "markdown, text or html",
+       "type": "string"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "iframe to read; page_snapshot and an empty read list the ids"
+      },
+      "max_chars": {
+       "default": 20000,
+       "description": "characters per call; continue with offset",
+       "type": "integer"
+      },
+      "offset": {
+       "default": 0,
+       "description": "continue reading from this character offset",
+       "type": "integer"
+      },
+      "scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector. markdown: treat this subtree as the main content; text, html: read only this subtree"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "navigate here first, then read, in one call, same as navigate with read=format; uses tab_id, else the active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_read"
+   },
+   {
+    "description": "Capture a tab as an inline image with a short text summary. Firefox captures background tabs without taking focus, except a page left with no layout (0x0) by a minimized or background window; Chromium briefly activates the tab. Each shot first waits briefly for web fonts, image decode and a quiet animation frame",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "png",
+       "description": "png or jpeg",
+       "type": "string"
+      },
+      "full_page": {
+       "default": false,
+       "description": "capture the entire scrollable page",
+       "type": "boolean"
+      },
+      "quality": {
+       "default": 90,
+       "description": "JPEG quality, 1 to 100",
+       "type": "integer"
+      },
+      "selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "capture one element by snapshot ref, CSS selector or visible text, cropped to its box; overrides full_page. Zero or several matches is an error"
+      },
+      "settle_ms": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "cap in ms on the pre-shot wait, default about 1200; 0 skips it"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_screenshot"
+   },
+   {
+    "description": "Map a page's interactive elements, one line each: ref role \"name\" value/state selector. Pass a ref such as e5 or the selector as a page_act target. Runs of same-name controls collapse to one line with a count; iframes are listed at the end with their frame_ids. forms mode: radio and checkbox groups with their options and current selection, inputs with values, buttons with enabled state. records mode: one row per repeated card (product grid, search results) with title, link, prices and image, each read from inside that card. A card with more than one live price is AMBIGUOUS and lists the candidates, each with the words beside it; struck-through prices are reported separately; tracking redirects are unwrapped. With no confident pattern it refuses; then pass item_selector",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "snapshot inside this iframe"
+      },
+      "include_hidden": {
+       "default": false,
+       "description": "include hidden and off-screen elements",
+       "type": "boolean"
+      },
+      "item_selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "records only: CSS selector matching one card"
+      },
+      "max_elements": {
+       "default": 150,
+       "description": "element or record cap",
+       "type": "integer"
+      },
+      "mode": {
+       "default": "interactive",
+       "description": "interactive, forms or records",
+       "type": "string"
+      },
+      "root": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector of the subtree to map"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_snapshot"
+   },
+   {
+    "description": "See the headers and bodies a page sends: cookies, auth headers, its own XHRs. Cookie and auth header values come back <redacted>, which still shows they were sent; bodies come back raw by default. recent: the per-tab log of the last ~300 requests (method, URL, status, timing), retroactive, no monitor needed; successful static assets are hidden; no headers or bodies, those need a monitor. start: capture url_patterns such as */api/*; returns a monitor_id that expires after options.ttl_seconds. list: captured request summaries for monitor_id. get: one capture in full; request_id must belong to that monitor. Headers appear ONLY here. stop: end the monitor. get returns request_headers, response_headers, request_body and response_body, each body as {included, content, content_type, encoding, size_bytes, truncated, note}; note says why a body is missing. request_headers == {} never means none were sent; request_headers_note says why they were not captured, usually a cache hit",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "recent",
+       "description": "recent, start, stop, list or get",
+       "type": "string"
+      },
+      "filter": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: JS regex over the URL"
+      },
+      "include_binary": {
+       "default": false,
+       "description": "get: return binary bodies as base64; capture them by widening options.content_types_to_capture",
+       "type": "boolean"
+      },
+      "limit": {
+       "default": 30,
+       "description": "recent: max entries",
+       "type": "integer"
+      },
+      "monitor_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "list, get, stop: the monitor"
+      },
+      "options": {
+       "additionalProperties": true,
+       "description": "start overrides. ttl_seconds: monitor lifetime, default 10 minutes, 10s..1h. max_body_size: bytes per body, default 50000, clamped 1000..1000000; longer bodies are truncated. content_types_to_capture: default JSON and text. sensitive_headers: extra header names to redact; a display filter, not a capture filter. authorization, cookie, set-cookie and similar are always <redacted> and no argument reveals them",
+       "type": "object"
+      },
+      "request_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "get: the captured request, from list"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: the tab whose log to read, default active tab. start: capture only this tab, default all tabs"
+      },
+      "url_patterns": {
+       "description": "start, required: glob URL patterns to capture",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    },
+    "name": "requests"
+   },
+   {
+    "description": "Is BrowserPlug working? Reports the connected browsers, which one this session drives, the MCP clients on the shared server, the request-queue depth and limit, and any failed precondition with its remedy. Call it first when page tools get no response. For file:// tabs, extension_file_access.can_read_opened_file_tab says whether page_* tools can read one the user has open (a per-user toggle); can_open_file_url says whether BrowserPlug can open one: never on Firefox, on Chromium once that toggle is on",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "verbose": {
+       "default": false,
+       "description": "add the full connection dump; large, and the summary has everything diagnostic",
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    },
+    "name": "server_info"
+   },
+   {
+    "description": "Open, find, close and switch the user's browser tabs and windows. Open your own tab with tabs(action=\"open\", background=true, url=\"https://…\")",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "list",
+       "description": "list: open tabs grouped by window. active: the tab page_* tools use when tab_id is omitted. find: tabs whose URL or title contains url. open: load url in a new tab or window. close: a tab, or a whole window via window_id. activate: bring tab_id to the front. window: move, resize, minimize or maximize a window. routing: report a tab's proxy",
+       "type": "string"
+      },
+      "background": {
+       "default": false,
+       "description": "open only. Leave the user on their current tab; page_* tools drive a background tab by its id",
+       "type": "boolean"
+      },
+      "focus_window": {
+       "default": true,
+       "description": "activate and window. true raises the window; false acts without taking focus, but an unfocused or minimized window is not painted and screenshots blank",
+       "type": "boolean"
+      },
+      "height": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels, as width"
+      },
+      "incognito": {
+       "default": false,
+       "description": "open only. A private window, without the profile's cookies or logins",
+       "type": "boolean"
+      },
+      "new_window": {
+       "default": false,
+       "description": "open only. A new window instead of a tab, sharing the profile's cookies and logins",
+       "type": "boolean"
+      },
+      "pinned": {
+       "default": false,
+       "description": "open only. Pin the new tab",
+       "type": "boolean"
+      },
+      "proxy": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "only when the user asks for a proxy; omit it otherwise. open (normal tabs): route the new tab through tor (the built-in Tor client; first use downloads it, allow a minute) or a socks5, socks5h, socks4 or socks4a URL with host:port such as socks5://127.0.0.1:9050. NOT supported: HTTP, HTTPS, PAC, authenticated or system proxies. DNS resolves at the proxy, so .onion hosts load; fail-closed if unreachable. Chromium has no per-tab routing: it switches the WHOLE browser, the user's tabs included, until cleared. routing: only \"\", which clears it. list marks proxied tabs"
+      },
+      "recent": {
+       "default": true,
+       "description": "list only. true: the recently used tabs plus a count of the rest; false: every open tab",
+       "type": "boolean"
+      },
+      "state": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window only: normal, minimized, maximized or fullscreen"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "tab id from list, find or active, for activate, close and routing; routing defaults to the active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for open and find. open: the address to load, with scheme. find: a case-insensitive literal substring of a tab's URL or title; one distinctive word beats a phrase"
+      },
+      "width": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels: the new width for window, or the initial width of a new_window or incognito window; ignored when maximized or fullscreen"
+      },
+      "window_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window id from list. close: the whole window instead of one tab. window: the window to change, default the focused one. open: the window for the new tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "tabs"
+   }
+  ]
+ },
+ "scripts_enabled": {
+  "order": [
+   "tabs",
+   "navigate",
+   "page_read",
+   "page_snapshot",
+   "page_act",
+   "page_eval",
+   "page_screenshot",
+   "requests",
+   "server_info"
+  ],
+  "params": {
+   "navigate": [
+    "tab_id",
+    "action",
+    "wait",
+    "wait_for",
+    "timeout_ms",
+    "bypass_cache",
+    "read",
+    "read_scope",
+    "read_max_chars",
+    "url"
+   ],
+   "page_act": [
+    "steps",
+    "tab_id",
+    "frame_id"
+   ],
+   "page_eval": [
+    "code",
+    "tab_id",
+    "world",
+    "frame_id",
+    "script_name",
+    "script_args"
+   ],
+   "page_read": [
+    "tab_id",
+    "url",
+    "format",
+    "scope",
+    "max_chars",
+    "offset",
+    "frame_id"
+   ],
+   "page_screenshot": [
+    "tab_id",
+    "full_page",
+    "selector",
+    "format",
+    "quality",
+    "settle_ms"
+   ],
+   "page_snapshot": [
+    "tab_id",
+    "mode",
+    "root",
+    "max_elements",
+    "include_hidden",
+    "frame_id",
+    "item_selector"
+   ],
+   "requests": [
+    "action",
+    "tab_id",
+    "filter",
+    "limit",
+    "url_patterns",
+    "monitor_id",
+    "request_id",
+    "options",
+    "include_binary"
+   ],
+   "server_info": [
+    "verbose"
+   ],
+   "tabs": [
+    "action",
+    "background",
+    "recent",
+    "tab_id",
+    "window_id",
+    "new_window",
+    "incognito",
+    "pinned",
+    "focus_window",
+    "state",
+    "width",
+    "height",
+    "url"
+   ]
+  },
+  "signature": "5ab251b5e806",
+  "tools": [
+   {
+    "description": "Load url in a tab, or go back, forward or reload, and wait until the page is ready. Reports the final URL and title, failed requests, console errors and Service Worker registrations",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "goto",
+       "description": "goto, back, forward or reload",
+       "type": "string"
+      },
+      "bypass_cache": {
+       "default": false,
+       "description": "reload only",
+       "type": "boolean"
+      },
+      "read": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "also return the page in this call: markdown (main content), text, html or records (one row per listing card). A failed, timed-out, superseded or off-site navigation returns the failure, not content"
+      },
+      "read_max_chars": {
+       "default": 20000,
+       "description": "character cap for the read",
+       "type": "integer"
+      },
+      "read_scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector scoping the read, as page_read scope"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "timeout_ms": {
+       "default": 20000,
+       "description": "settle budget in ms",
+       "type": "integer"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for goto, the default action: the address to load, with scheme"
+      },
+      "wait": {
+       "default": "settled",
+       "description": "settled: committed, loaded, no request in flight, 250 ms of network quiet. dom: load, then DOM unchanged for 100 ms, max 3 s; a page that fetches content after load may return as a skeleton. load: load event only. none: return now",
+       "type": "string"
+      },
+      "wait_for": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector that must also be present before returning"
+      }
+     },
+     "type": "object"
+    },
+    "name": "navigate"
+   },
+   {
+    "description": "Run interaction steps on a page in one call. Steps run in order and stop at the first failure unless a step sets continue_on_error. A login is one call: fill #email, click Log in, then wait for url_contains /dashboard. Each step reports what it changed (DOM, URL, dialog), the network requests it triggered and console errors. fill drives React and Vue controlled inputs and select elements",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "act inside this iframe"
+      },
+      "steps": {
+       "items": {
+        "properties": {
+         "action": {
+          "description": "click, fill, select, check, press, hover, scroll or wait",
+          "type": "string"
+         },
+         "continue_on_error": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "run later steps even if this one fails"
+         },
+         "count": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "CSS selectors to count before and after this step, to see whether a click loaded more"
+         },
+         "enabled_only": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match enabled elements"
+         },
+         "gone": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until target, text or url is ABSENT"
+         },
+         "nth": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "0-based pick when several elements match"
+         },
+         "predicate": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: JS boolean expression, isolated world"
+         },
+         "require_visible": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: the selector must be visible, not just present"
+         },
+         "role": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ARIA role filter for a text target, such as button or link"
+         },
+         "settle_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ms to settle after the step, default 600 for click, else 0"
+         },
+         "submit": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill: press Enter after setting the value"
+         },
+         "target": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "snapshot ref such as e5, CSS selector or accessible-name text, tried in that order. wait: the CSS selector to wait for"
+         },
+         "text_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until page text contains this"
+         },
+         "timeout_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: max ms, default 10000"
+         },
+         "url_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until the URL contains this"
+         },
+         "value": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill, select: the value; a checkbox takes true or false. check: true or false. press: a key such as Enter or Escape. scroll: top, bottom or a pixel offset"
+         },
+         "watch": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "targets whose visible, enabled and value state to report before and after this step"
+         },
+         "within": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match inside this ref or CSS selector"
+         }
+        },
+        "required": [
+         "action"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "required": [
+      "steps"
+     ],
+     "type": "object"
+    },
+    "name": "page_act"
+   },
+   {
+    "description": "Run JavaScript in a tab and return the value of the last expression; a returned Promise is awaited. isolated world: full DOM access, immune to page CSP, but page JS globals and the expandos page scripts set on DOM nodes (React fiber keys, __vue internals) are invisible; on Firefox read globals via window.wrappedJSObject. main world: the page's own world, which sees everything; a strict page CSP can block it, and the result says so\n\nscript_name runs a script from $BROWSERPLUG_EXT_SCRIPTS and evaluates its stdout as the code. script_args is a JSON array of strings such as '[\"a\",\"b\"]', or \"\" for none, passed without a shell",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "JavaScript to run"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "run inside this iframe"
+      },
+      "script_args": {
+       "default": "",
+       "type": "string"
+      },
+      "script_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "world": {
+       "default": "isolated",
+       "description": "isolated or main",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_eval"
+   },
+   {
+    "description": "Read a page's content. markdown extracts the main content with Defuddle, stripping navigation, ads and page chrome and keeping title, site and author; it falls back to plain text if extraction fails",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "markdown",
+       "description": "markdown, text or html",
+       "type": "string"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "iframe to read; page_snapshot and an empty read list the ids"
+      },
+      "max_chars": {
+       "default": 20000,
+       "description": "characters per call; continue with offset",
+       "type": "integer"
+      },
+      "offset": {
+       "default": 0,
+       "description": "continue reading from this character offset",
+       "type": "integer"
+      },
+      "scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector. markdown: treat this subtree as the main content; text, html: read only this subtree"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "navigate here first, then read, in one call, same as navigate with read=format; uses tab_id, else the active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_read"
+   },
+   {
+    "description": "Capture a tab as an inline image with a short text summary. Firefox captures background tabs without taking focus, except a page left with no layout (0x0) by a minimized or background window; Chromium briefly activates the tab. Each shot first waits briefly for web fonts, image decode and a quiet animation frame",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "png",
+       "description": "png or jpeg",
+       "type": "string"
+      },
+      "full_page": {
+       "default": false,
+       "description": "capture the entire scrollable page",
+       "type": "boolean"
+      },
+      "quality": {
+       "default": 90,
+       "description": "JPEG quality, 1 to 100",
+       "type": "integer"
+      },
+      "selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "capture one element by snapshot ref, CSS selector or visible text, cropped to its box; overrides full_page. Zero or several matches is an error"
+      },
+      "settle_ms": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "cap in ms on the pre-shot wait, default about 1200; 0 skips it"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_screenshot"
+   },
+   {
+    "description": "Map a page's interactive elements, one line each: ref role \"name\" value/state selector. Pass a ref such as e5 or the selector as a page_act target. Runs of same-name controls collapse to one line with a count; iframes are listed at the end with their frame_ids. forms mode: radio and checkbox groups with their options and current selection, inputs with values, buttons with enabled state. records mode: one row per repeated card (product grid, search results) with title, link, prices and image, each read from inside that card. A card with more than one live price is AMBIGUOUS and lists the candidates, each with the words beside it; struck-through prices are reported separately; tracking redirects are unwrapped. With no confident pattern it refuses; then pass item_selector",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "snapshot inside this iframe"
+      },
+      "include_hidden": {
+       "default": false,
+       "description": "include hidden and off-screen elements",
+       "type": "boolean"
+      },
+      "item_selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "records only: CSS selector matching one card"
+      },
+      "max_elements": {
+       "default": 150,
+       "description": "element or record cap",
+       "type": "integer"
+      },
+      "mode": {
+       "default": "interactive",
+       "description": "interactive, forms or records",
+       "type": "string"
+      },
+      "root": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector of the subtree to map"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_snapshot"
+   },
+   {
+    "description": "See the headers and bodies a page sends: cookies, auth headers, its own XHRs. Cookie and auth header values come back <redacted>, which still shows they were sent; bodies come back raw by default. recent: the per-tab log of the last ~300 requests (method, URL, status, timing), retroactive, no monitor needed; successful static assets are hidden; no headers or bodies, those need a monitor. start: capture url_patterns such as */api/*; returns a monitor_id that expires after options.ttl_seconds. list: captured request summaries for monitor_id. get: one capture in full; request_id must belong to that monitor. Headers appear ONLY here. stop: end the monitor. get returns request_headers, response_headers, request_body and response_body, each body as {included, content, content_type, encoding, size_bytes, truncated, note}; note says why a body is missing. request_headers == {} never means none were sent; request_headers_note says why they were not captured, usually a cache hit",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "recent",
+       "description": "recent, start, stop, list or get",
+       "type": "string"
+      },
+      "filter": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: JS regex over the URL"
+      },
+      "include_binary": {
+       "default": false,
+       "description": "get: return binary bodies as base64; capture them by widening options.content_types_to_capture",
+       "type": "boolean"
+      },
+      "limit": {
+       "default": 30,
+       "description": "recent: max entries",
+       "type": "integer"
+      },
+      "monitor_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "list, get, stop: the monitor"
+      },
+      "options": {
+       "additionalProperties": true,
+       "description": "start overrides. ttl_seconds: monitor lifetime, default 10 minutes, 10s..1h. max_body_size: bytes per body, default 50000, clamped 1000..1000000; longer bodies are truncated. content_types_to_capture: default JSON and text. sensitive_headers: extra header names to redact; a display filter, not a capture filter. authorization, cookie, set-cookie and similar are always <redacted> and no argument reveals them",
+       "type": "object"
+      },
+      "request_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "get: the captured request, from list"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: the tab whose log to read, default active tab. start: capture only this tab, default all tabs"
+      },
+      "url_patterns": {
+       "description": "start, required: glob URL patterns to capture",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    },
+    "name": "requests"
+   },
+   {
+    "description": "Is BrowserPlug working? Reports the connected browsers, which one this session drives, the MCP clients on the shared server, the request-queue depth and limit, and any failed precondition with its remedy. Call it first when page tools get no response. For file:// tabs, extension_file_access.can_read_opened_file_tab says whether page_* tools can read one the user has open (a per-user toggle); can_open_file_url says whether BrowserPlug can open one: never on Firefox, on Chromium once that toggle is on",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "verbose": {
+       "default": false,
+       "description": "add the full connection dump; large, and the summary has everything diagnostic",
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    },
+    "name": "server_info"
+   },
+   {
+    "description": "Open, find, close and switch the user's browser tabs and windows. Open your own tab with tabs(action=\"open\", background=true, url=\"https://…\")",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "list",
+       "description": "list: open tabs grouped by window. active: the tab page_* tools use when tab_id is omitted. find: tabs whose URL or title contains url. open: load url in a new tab or window. close: a tab, or a whole window via window_id. activate: bring tab_id to the front. window: move, resize, minimize or maximize a window. routing: report a tab's proxy",
+       "type": "string"
+      },
+      "background": {
+       "default": false,
+       "description": "open only. Leave the user on their current tab; page_* tools drive a background tab by its id",
+       "type": "boolean"
+      },
+      "focus_window": {
+       "default": true,
+       "description": "activate and window. true raises the window; false acts without taking focus, but an unfocused or minimized window is not painted and screenshots blank",
+       "type": "boolean"
+      },
+      "height": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels, as width"
+      },
+      "incognito": {
+       "default": false,
+       "description": "open only. A private window, without the profile's cookies or logins",
+       "type": "boolean"
+      },
+      "new_window": {
+       "default": false,
+       "description": "open only. A new window instead of a tab, sharing the profile's cookies and logins",
+       "type": "boolean"
+      },
+      "pinned": {
+       "default": false,
+       "description": "open only. Pin the new tab",
+       "type": "boolean"
+      },
+      "recent": {
+       "default": true,
+       "description": "list only. true: the recently used tabs plus a count of the rest; false: every open tab",
+       "type": "boolean"
+      },
+      "state": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window only: normal, minimized, maximized or fullscreen"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "tab id from list, find or active, for activate, close and routing; routing defaults to the active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for open and find. open: the address to load, with scheme. find: a case-insensitive literal substring of a tab's URL or title; one distinctive word beats a phrase"
+      },
+      "width": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels: the new width for window, or the initial width of a new_window or incognito window; ignored when maximized or fullscreen"
+      },
+      "window_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window id from list. close: the whole window instead of one tab. window: the window to change, default the focused one. open: the window for the new tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "tabs"
+   }
+  ]
+ },
+ "two_browsers": {
+  "order": [
+   "tabs",
+   "navigate",
+   "page_read",
+   "page_snapshot",
+   "page_act",
+   "page_eval",
+   "page_screenshot",
+   "requests",
+   "browsers",
+   "server_info"
+  ],
+  "params": {
+   "browsers": [
+    "action",
+    "target"
+   ],
+   "navigate": [
+    "tab_id",
+    "action",
+    "wait",
+    "wait_for",
+    "timeout_ms",
+    "bypass_cache",
+    "read",
+    "read_scope",
+    "read_max_chars",
+    "url"
+   ],
+   "page_act": [
+    "steps",
+    "tab_id",
+    "frame_id"
+   ],
+   "page_eval": [
+    "code",
+    "tab_id",
+    "world",
+    "frame_id"
+   ],
+   "page_read": [
+    "tab_id",
+    "url",
+    "format",
+    "scope",
+    "max_chars",
+    "offset",
+    "frame_id"
+   ],
+   "page_screenshot": [
+    "tab_id",
+    "full_page",
+    "selector",
+    "format",
+    "quality",
+    "settle_ms"
+   ],
+   "page_snapshot": [
+    "tab_id",
+    "mode",
+    "root",
+    "max_elements",
+    "include_hidden",
+    "frame_id",
+    "item_selector"
+   ],
+   "requests": [
+    "action",
+    "tab_id",
+    "filter",
+    "limit",
+    "url_patterns",
+    "monitor_id",
+    "request_id",
+    "options",
+    "include_binary"
+   ],
+   "server_info": [
+    "verbose"
+   ],
+   "tabs": [
+    "action",
+    "background",
+    "recent",
+    "tab_id",
+    "window_id",
+    "new_window",
+    "incognito",
+    "pinned",
+    "focus_window",
+    "state",
+    "width",
+    "height",
+    "url"
+   ]
+  },
+  "signature": "78e580d10744",
+  "tools": [
+   {
+    "description": "Pick which of the 2 connected browsers your calls drive. Each is a separate logged-in profile, and tabs, navigate, page_* and requests act in one of them: until you switch, the server default marked below (the pinned browser, else the first to connect). The choice is per-MCP-client and sticky; it moves only your session. Tab ids and page_snapshot refs do not carry across browsers. If the browser you chose disconnects, calls fail instead of falling back\n\n  [1] firefox-dev; Firefox Developer Edition 150.0   <- server default\n  [2] chrome; Chrome 150.0",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "list",
+       "description": "list: the live roster, with each browser's version, connect time and last use. use: switch this session to target",
+       "type": "string"
+      },
+      "target": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "use: a slot number from the roster such as 2, or a case-insensitive substring of a browser's name such as zen"
+      }
+     },
+     "type": "object"
+    },
+    "name": "browsers"
+   },
+   {
+    "description": "Load url in a tab, or go back, forward or reload, and wait until the page is ready. Reports the final URL and title, failed requests, console errors and Service Worker registrations",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "goto",
+       "description": "goto, back, forward or reload",
+       "type": "string"
+      },
+      "bypass_cache": {
+       "default": false,
+       "description": "reload only",
+       "type": "boolean"
+      },
+      "read": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "also return the page in this call: markdown (main content), text, html or records (one row per listing card). A failed, timed-out, superseded or off-site navigation returns the failure, not content"
+      },
+      "read_max_chars": {
+       "default": 20000,
+       "description": "character cap for the read",
+       "type": "integer"
+      },
+      "read_scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector scoping the read, as page_read scope"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "timeout_ms": {
+       "default": 20000,
+       "description": "settle budget in ms",
+       "type": "integer"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for goto, the default action: the address to load, with scheme"
+      },
+      "wait": {
+       "default": "settled",
+       "description": "settled: committed, loaded, no request in flight, 250 ms of network quiet. dom: load, then DOM unchanged for 100 ms, max 3 s; a page that fetches content after load may return as a skeleton. load: load event only. none: return now",
+       "type": "string"
+      },
+      "wait_for": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector that must also be present before returning"
+      }
+     },
+     "type": "object"
+    },
+    "name": "navigate"
+   },
+   {
+    "description": "Run interaction steps on a page in one call. Steps run in order and stop at the first failure unless a step sets continue_on_error. A login is one call: fill #email, click Log in, then wait for url_contains /dashboard. Each step reports what it changed (DOM, URL, dialog), the network requests it triggered and console errors. fill drives React and Vue controlled inputs and select elements",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "act inside this iframe"
+      },
+      "steps": {
+       "items": {
+        "properties": {
+         "action": {
+          "description": "click, fill, select, check, press, hover, scroll or wait",
+          "type": "string"
+         },
+         "continue_on_error": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "run later steps even if this one fails"
+         },
+         "count": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "CSS selectors to count before and after this step, to see whether a click loaded more"
+         },
+         "enabled_only": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match enabled elements"
+         },
+         "gone": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until target, text or url is ABSENT"
+         },
+         "nth": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "0-based pick when several elements match"
+         },
+         "predicate": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: JS boolean expression, isolated world"
+         },
+         "require_visible": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: the selector must be visible, not just present"
+         },
+         "role": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ARIA role filter for a text target, such as button or link"
+         },
+         "settle_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "ms to settle after the step, default 600 for click, else 0"
+         },
+         "submit": {
+          "anyOf": [
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill: press Enter after setting the value"
+         },
+         "target": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "snapshot ref such as e5, CSS selector or accessible-name text, tried in that order. wait: the CSS selector to wait for"
+         },
+         "text_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until page text contains this"
+         },
+         "timeout_ms": {
+          "anyOf": [
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: max ms, default 10000"
+         },
+         "url_contains": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "wait: until the URL contains this"
+         },
+         "value": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "boolean"
+           },
+           {
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "fill, select: the value; a checkbox takes true or false. check: true or false. press: a key such as Enter or Escape. scroll: top, bottom or a pixel offset"
+         },
+         "watch": {
+          "anyOf": [
+           {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "targets whose visible, enabled and value state to report before and after this step"
+         },
+         "within": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "default": null,
+          "description": "only match inside this ref or CSS selector"
+         }
+        },
+        "required": [
+         "action"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "required": [
+      "steps"
+     ],
+     "type": "object"
+    },
+    "name": "page_act"
+   },
+   {
+    "description": "Run JavaScript in a tab and return the value of the last expression; a returned Promise is awaited. isolated world: full DOM access, immune to page CSP, but page JS globals and the expandos page scripts set on DOM nodes (React fiber keys, __vue internals) are invisible; on Firefox read globals via window.wrappedJSObject. main world: the page's own world, which sees everything; a strict page CSP can block it, and the result says so",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "JavaScript to run"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "run inside this iframe"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "world": {
+       "default": "isolated",
+       "description": "isolated or main",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_eval"
+   },
+   {
+    "description": "Read a page's content. markdown extracts the main content with Defuddle, stripping navigation, ads and page chrome and keeping title, site and author; it falls back to plain text if extraction fails",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "markdown",
+       "description": "markdown, text or html",
+       "type": "string"
+      },
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "iframe to read; page_snapshot and an empty read list the ids"
+      },
+      "max_chars": {
+       "default": 20000,
+       "description": "characters per call; continue with offset",
+       "type": "integer"
+      },
+      "offset": {
+       "default": 0,
+       "description": "continue reading from this character offset",
+       "type": "integer"
+      },
+      "scope": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector. markdown: treat this subtree as the main content; text, html: read only this subtree"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "navigate here first, then read, in one call, same as navigate with read=format; uses tab_id, else the active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_read"
+   },
+   {
+    "description": "Capture a tab as an inline image with a short text summary. Firefox captures background tabs without taking focus, except a page left with no layout (0x0) by a minimized or background window; Chromium briefly activates the tab. Each shot first waits briefly for web fonts, image decode and a quiet animation frame",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "format": {
+       "default": "png",
+       "description": "png or jpeg",
+       "type": "string"
+      },
+      "full_page": {
+       "default": false,
+       "description": "capture the entire scrollable page",
+       "type": "boolean"
+      },
+      "quality": {
+       "default": 90,
+       "description": "JPEG quality, 1 to 100",
+       "type": "integer"
+      },
+      "selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "capture one element by snapshot ref, CSS selector or visible text, cropped to its box; overrides full_page. Zero or several matches is an error"
+      },
+      "settle_ms": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "cap in ms on the pre-shot wait, default about 1200; 0 skips it"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_screenshot"
+   },
+   {
+    "description": "Map a page's interactive elements, one line each: ref role \"name\" value/state selector. Pass a ref such as e5 or the selector as a page_act target. Runs of same-name controls collapse to one line with a count; iframes are listed at the end with their frame_ids. forms mode: radio and checkbox groups with their options and current selection, inputs with values, buttons with enabled state. records mode: one row per repeated card (product grid, search results) with title, link, prices and image, each read from inside that card. A card with more than one live price is AMBIGUOUS and lists the candidates, each with the words beside it; struck-through prices are reported separately; tracking redirects are unwrapped. With no confident pattern it refuses; then pass item_selector",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "frame_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "snapshot inside this iframe"
+      },
+      "include_hidden": {
+       "default": false,
+       "description": "include hidden and off-screen elements",
+       "type": "boolean"
+      },
+      "item_selector": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "records only: CSS selector matching one card"
+      },
+      "max_elements": {
+       "default": 150,
+       "description": "element or record cap",
+       "type": "integer"
+      },
+      "mode": {
+       "default": "interactive",
+       "description": "interactive, forms or records",
+       "type": "string"
+      },
+      "root": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "CSS selector of the subtree to map"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "default: active tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "page_snapshot"
+   },
+   {
+    "description": "See the headers and bodies a page sends: cookies, auth headers, its own XHRs. Cookie and auth header values come back <redacted>, which still shows they were sent; bodies come back raw by default. recent: the per-tab log of the last ~300 requests (method, URL, status, timing), retroactive, no monitor needed; successful static assets are hidden; no headers or bodies, those need a monitor. start: capture url_patterns such as */api/*; returns a monitor_id that expires after options.ttl_seconds. list: captured request summaries for monitor_id. get: one capture in full; request_id must belong to that monitor. Headers appear ONLY here. stop: end the monitor. get returns request_headers, response_headers, request_body and response_body, each body as {included, content, content_type, encoding, size_bytes, truncated, note}; note says why a body is missing. request_headers == {} never means none were sent; request_headers_note says why they were not captured, usually a cache hit",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "recent",
+       "description": "recent, start, stop, list or get",
+       "type": "string"
+      },
+      "filter": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: JS regex over the URL"
+      },
+      "include_binary": {
+       "default": false,
+       "description": "get: return binary bodies as base64; capture them by widening options.content_types_to_capture",
+       "type": "boolean"
+      },
+      "limit": {
+       "default": 30,
+       "description": "recent: max entries",
+       "type": "integer"
+      },
+      "monitor_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "list, get, stop: the monitor"
+      },
+      "options": {
+       "additionalProperties": true,
+       "description": "start overrides. ttl_seconds: monitor lifetime, default 10 minutes, 10s..1h. max_body_size: bytes per body, default 50000, clamped 1000..1000000; longer bodies are truncated. content_types_to_capture: default JSON and text. sensitive_headers: extra header names to redact; a display filter, not a capture filter. authorization, cookie, set-cookie and similar are always <redacted> and no argument reveals them",
+       "type": "object"
+      },
+      "request_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "get: the captured request, from list"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "recent: the tab whose log to read, default active tab. start: capture only this tab, default all tabs"
+      },
+      "url_patterns": {
+       "description": "start, required: glob URL patterns to capture",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    },
+    "name": "requests"
+   },
+   {
+    "description": "Is BrowserPlug working? Reports the connected browsers, which one this session drives, the MCP clients on the shared server, the request-queue depth and limit, and any failed precondition with its remedy. Call it first when page tools get no response. For file:// tabs, extension_file_access.can_read_opened_file_tab says whether page_* tools can read one the user has open (a per-user toggle); can_open_file_url says whether BrowserPlug can open one: never on Firefox, on Chromium once that toggle is on",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "verbose": {
+       "default": false,
+       "description": "add the full connection dump; large, and the summary has everything diagnostic",
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    },
+    "name": "server_info"
+   },
+   {
+    "description": "Open, find, close and switch the user's browser tabs and windows. Open your own tab with tabs(action=\"open\", background=true, url=\"https://…\")",
+    "input_schema": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "default": "list",
+       "description": "list: open tabs grouped by window. active: the tab page_* tools use when tab_id is omitted. find: tabs whose URL or title contains url. open: load url in a new tab or window. close: a tab, or a whole window via window_id. activate: bring tab_id to the front. window: move, resize, minimize or maximize a window. routing: report a tab's proxy",
+       "type": "string"
+      },
+      "background": {
+       "default": false,
+       "description": "open only. Leave the user on their current tab; page_* tools drive a background tab by its id",
+       "type": "boolean"
+      },
+      "focus_window": {
+       "default": true,
+       "description": "activate and window. true raises the window; false acts without taking focus, but an unfocused or minimized window is not painted and screenshots blank",
+       "type": "boolean"
+      },
+      "height": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels, as width"
+      },
+      "incognito": {
+       "default": false,
+       "description": "open only. A private window, without the profile's cookies or logins",
+       "type": "boolean"
+      },
+      "new_window": {
+       "default": false,
+       "description": "open only. A new window instead of a tab, sharing the profile's cookies and logins",
+       "type": "boolean"
+      },
+      "pinned": {
+       "default": false,
+       "description": "open only. Pin the new tab",
+       "type": "boolean"
+      },
+      "recent": {
+       "default": true,
+       "description": "list only. true: the recently used tabs plus a count of the rest; false: every open tab",
+       "type": "boolean"
+      },
+      "state": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window only: normal, minimized, maximized or fullscreen"
+      },
+      "tab_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "tab id from list, find or active, for activate, close and routing; routing defaults to the active tab"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "required for open and find. open: the address to load, with scheme. find: a case-insensitive literal substring of a tab's URL or title; one distinctive word beats a phrase"
+      },
+      "width": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "pixels: the new width for window, or the initial width of a new_window or incognito window; ignored when maximized or fullscreen"
+      },
+      "window_id": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "window id from list. close: the whole window instead of one tab. window: the window to change, default the focused one. open: the window for the new tab"
+      }
+     },
+     "type": "object"
+    },
+    "name": "tabs"
+   }
+  ]
+ }
+}

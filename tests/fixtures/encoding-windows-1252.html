@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="windows-1252">
+  <title>BrowserPlug Windows-1252 Fixture — “Smart” quotes</title>
+</head>
+<body>
+  <h1>Windows-1252 fixture</h1>
+  <!--
+    This file is encoded as Windows-1252 (NOT UTF-8) and declares it via the
+    meta charset. It uses the cp1252-only 0x80-0x9F punctuation that has no
+    matching single-byte UTF-8 form, so any tool that assumes UTF-8 (or whose
+    pipeline decodes bytes with the wrong codec) corrupts or crashes on it.
+  -->
+  <p id="cp1252">Curly quotes “one” and ‘two’, em-dash — en-dash –, ellipsis… bullet • trademark™ euro € price 99¢.</p>
+  <p id="accents">Café naïve résumé über Schrödinger — © 2026 « guillemets ».</p>
+  <p id="marker">DISTINCTIVE_MARKER_CP1252_PAGE</p>
+  <label for="cp-input">Name — “your” full name</label>
+  <input type="text" id="cp-input" name="cp-input">
+  <button type="button" id="cp-btn" onclick="document.getElementById('cp-result').textContent='Saved™:'+document.getElementById('cp-input').value">Save “it” — now…</button>
+  <div id="cp-result"></div>
+</body>
+</html>

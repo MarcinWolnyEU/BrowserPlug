@@ -1,0 +1,14 @@
+title = "BrowserPlug gitleaks config"
+
+[extend]
+useDefault = true
+
+# These two files feed made-up credentials to the redaction code on purpose, to prove it
+# masks them. The allowlist covers the generic-api-key rule in those files and nothing else.
+[[allowlists]]
+description = "Redaction test fixtures"
+targetRules = ["generic-api-key"]
+paths = [
+  '''^tests/unit/test_call_redaction\.py$''',
+  '''^tests/js/body-censor\.test\.mjs$''',
+]

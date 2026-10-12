@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug React Controlled Form Fixture</title>
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+</head>
+<body>
+  <h1>React controlled form fixture</h1>
+  <!--
+    HONEST React 18 fixture: all control state lives in useState, the Submit
+    button's disabled prop is derived from that state (NOT from the DOM).
+    A naive `el.value = "x"` mutation never reaches onChange, so the state stays
+    empty and Submit stays disabled — only native-setter + dispatched 'input'
+    events (page_act fill) drive it correctly.
+  -->
+  <div id="root"></div>
+  <div id="form-result"></div>
+
+  <script>
+    var e = React.createElement;
+    var useState = React.useState;
+
+    function App() {
+      var nameState = useState('');
+      var name = nameState[0], setName = nameState[1];
+      var planState = useState('');
+      var plan = planState[0], setPlan = planState[1];
+
+      var canSubmit = name.length > 0 && plan.length > 0;
+
+      function onSubmit() {
+        document.getElementById('form-result').textContent =
+          JSON.stringify({ name: name, plan: plan });
+      }
+
+      return e('form', { onSubmit: function (ev) { ev.preventDefault(); } },
+        e('label', { htmlFor: 'project-name' }, 'Project name'),
+        e('input', {
+          id: 'project-name',
+          type: 'text',
+          value: name,
+          onChange: function (ev) { setName(ev.target.value); }
+        }),
+        e('fieldset', null,
+          e('legend', null, 'Plan'),
+          e('label', null,
+            e('input', {
+              type: 'radio', name: 'plan', value: 'free',
+              checked: plan === 'free',
+              onChange: function (ev) { setPlan(ev.target.value); }
+            }),
+            ' Free'
+          ),
+          e('label', null,
+            e('input', {
+              type: 'radio', name: 'plan', value: 'pro',
+              checked: plan === 'pro',
+              onChange: function (ev) { setPlan(ev.target.value); }
+            }),
+            ' Pro'
+          )
+        ),
+        e('button', {
+          type: 'button',
+          id: 'submit-btn',
+          disabled: !canSubmit,
+          onClick: onSubmit
+        }, 'Submit')
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+  </script>
+</body>
+</html>

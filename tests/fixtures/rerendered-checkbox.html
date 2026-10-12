@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkbox replaced by a re-render</title>
+<!--
+  Fixture: the control node is REPLACED, not mutated.
+
+  This is what a framework does on almost every state change: React with a changed
+  key, a list that re-renders, a template that rewrites innerHTML. The old <input>
+  is detached and a fresh one takes its place carrying the new state.
+
+  It caught a real hole in the first version of the click state check: the confirm
+  poll resolved the control BEFORE dispatching and then re-read that same node for
+  ~400 ms. Against a re-render it was reading a DETACHED element whose .checked can
+  never move again, so a click that worked perfectly was reported ok:false /
+  checkedUnchanged — the exact false negative the check exists to prevent, inverted.
+
+    #rr-toggle    replaces itself on click WITH the new state (id preserved).
+                  Must read as ok:true, checked:true, and say it re-resolved.
+    #rr-dead      replaces itself on click WITHOUT changing state (a re-render that
+                  discards the edit — a controlled component refusing an untrusted
+                  event). Must still be caught as ok:false: re-resolving must not
+                  become a way to lose the no-op detection.
+    #rr-gone      removes itself on click and puts nothing back. Nothing can be
+                  re-resolved, so the honest answer is "the control was removed",
+                  NOT "the toggle never moved".
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  .row { padding: 6px 0; }
+</style>
+</head>
+<body>
+<h1>Re-rendering filters</h1>
+
+<div class="row" id="slot-toggle">
+  <input id="rr-toggle" type="checkbox"><label for="rr-toggle">Re-renders WITH the new state</label>
+</div>
+
+<div class="row" id="slot-dead">
+  <input id="rr-dead" type="checkbox"><label for="rr-dead">Re-renders and discards the change</label>
+</div>
+
+<div class="row" id="slot-gone">
+  <input id="rr-gone" type="checkbox"><label for="rr-gone">Removes itself entirely</label>
+</div>
+
+<p id="log"></p>
+
+<script>
+  // Replace `slot`'s input with a brand-new node — the framework re-render shape.
+  // The listener is re-attached because the old node is gone; state is whatever the
+  // caller says it should be, NOT whatever the detached node ended up holding.
+  function reRender(slotId, inputId, nextChecked, handler) {
+    var slot = document.getElementById(slotId);
+    var old = document.getElementById(inputId);
+    var fresh = document.createElement('input');
+    fresh.type = 'checkbox';
+    fresh.id = inputId;
+    fresh.checked = nextChecked;
+    slot.replaceChild(fresh, old);
+    fresh.addEventListener('click', handler);
+    document.getElementById('log').textContent = 'rerendered ' + inputId +
+      ' checked=' + nextChecked;
+    return fresh;
+  }
+
+  function onToggle() {
+    // The native activation already flipped THIS (now doomed) node; the fresh one
+    // is created carrying that same new value, exactly as a framework would.
+    var next = document.getElementById('rr-toggle').checked;
+    setTimeout(function () { reRender('slot-toggle', 'rr-toggle', next, onToggle); }, 30);
+  }
+  document.getElementById('rr-toggle').addEventListener('click', onToggle);
+
+  function onDead() {
+    // A controlled component that refuses the untrusted edit: it re-renders back to
+    // its bound value (false), so the state genuinely did not change.
+    setTimeout(function () { reRender('slot-dead', 'rr-dead', false, onDead); }, 30);
+  }
+  document.getElementById('rr-dead').addEventListener('click', onDead);
+
+  document.getElementById('rr-gone').addEventListener('click', function () {
+    setTimeout(function () {
+      var el = document.getElementById('rr-gone');
+      if (el) el.parentNode.removeChild(el);
+      document.getElementById('log').textContent = 'removed rr-gone';
+    }, 30);
+  });
+</script>
+</body>
+</html>

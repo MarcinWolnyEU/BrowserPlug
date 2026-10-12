@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Controls a real user could not have clicked</title>
+<!--
+  Fixture: the reachability diagnosis, which ONLY a real browser can exercise.
+
+  jsdom has no layout engine, so document.elementFromPoint answers null for every
+  point; the diagnosis deliberately probes that and stays silent rather than
+  reporting a bogus "clipped" on every no-op. The consequence is that the whole
+  occlusion branch is dark under the JS suite — this fixture is its only coverage.
+
+  Note what reachability is and is NOT. A synthetic dispatchEvent is delivered
+  straight to the element, so an overlay never actually stops OUR click; the
+  diagnosis is an EXPLANATION offered after a click turned out to change nothing
+  ("a real user could not have reached this either"). That is why every control
+  here is deliberately dead: the point is which explanation comes back.
+
+    #covered    a role=checkbox with no working handler, under a position:fixed
+                banner. Expect: occludedBy naming the banner.
+    #clipped    a role=checkbox with no working handler, inside a height:0 /
+                overflow:hidden section — an accordion that is not expanded.
+                Expect: collapsedAncestor naming that section.
+    #plain      the SAME dead control, fully in the clear. Expect: no occlusion
+                claim at all, just the generic "no DOM structure changed". This is
+                the control case that stops the diagnosis over-claiming.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0; padding: 140px 20px 20px; }
+  #cookie-banner {
+    position: fixed; top: 0; left: 0; right: 0; height: 260px; z-index: 99;
+    background: #1b1f2a; color: #fff; padding: 16px; font-size: 15px;
+  }
+  [role=checkbox] { display: block; padding: 6px 0; cursor: pointer; }
+  #accordion-body { height: 0; overflow: hidden; }
+  .section { border: 1px solid #ccc; margin: 12px 0; padding: 8px; }
+</style>
+</head>
+<body>
+
+<div id="cookie-banner">
+  Ta strona uzywa plikow cookie. Akceptujesz?
+  <button type="button" id="accept">Akceptuje</button>
+</div>
+
+<div class="section">
+  <h2>Pod banerem</h2>
+  <!-- Sits under the fixed banner: elementFromPoint at its centre returns the banner. -->
+  <div id="covered" role="checkbox" aria-checked="false" tabindex="0">Western Digital (21)</div>
+</div>
+
+<div class="section">
+  <h2>Pojemnosc</h2>
+  <button type="button" id="expand">Rozwin</button>
+  <div id="accordion-body">
+    <div id="clipped" role="checkbox" aria-checked="false" tabindex="0">4000 GB (13)</div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 400px">
+  <h2>W pelni widoczne</h2>
+  <div id="plain" role="checkbox" aria-checked="false" tabindex="0">Seagate (18)</div>
+</div>
+
+<script>
+  // Every checkbox here is deliberately inert — the fixture is about the EXPLANATION
+  // returned for a click that accomplished nothing, not about the click failing.
+  ['covered', 'clipped', 'plain'].forEach(function (id) {
+    document.getElementById(id).addEventListener('click', function () {
+      /* the site binds its real handler somewhere else entirely */
+    });
+  });
+  document.getElementById('expand').addEventListener('click', function () {
+    document.getElementById('accordion-body').style.height = 'auto';
+  });
+  document.getElementById('accept').addEventListener('click', function () {
+    document.getElementById('cookie-banner').style.display = 'none';
+  });
+</script>
+</body>
+</html>

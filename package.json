@@ -1,0 +1,42 @@
+{
+  "name": "browserplug",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BrowserPlug: drives your live, logged-in Firefox or Chromium browser from MCP clients",
+  "scripts": {
+    "start": "uv run --locked --script server/server.py",
+    "test": "npm run test:js",
+    "test:js": "node --test \"tests/js/*.test.mjs\" \"tests/js-chromium/*.test.mjs\"",
+    "build": "uv run --script build_xpi.py",
+    "build:extensions": "npm run build",
+    "build-for-amo": "npm run build && uv run --script build_source_zip.py",
+    "dev": "uv sync --script server/server.py --locked && uv sync --script tests/run.py --locked"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MarcinWolnyEU/browserplug.git"
+  },
+  "keywords": [
+    "firefox",
+    "chromium",
+    "browser-automation",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "browser-extension",
+    "websocket",
+    "automation"
+  ],
+  "author": "Marcin Wolny",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/MarcinWolnyEU/browserplug/issues"
+  },
+  "homepage": "https://github.com/MarcinWolnyEU/browserplug#readme",
+  "engines": {
+    "python": ">=3.11"
+  }
+}

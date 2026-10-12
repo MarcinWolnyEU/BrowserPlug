@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wide interactive page</title>
+<!--
+  Fixture: a page whose snapshot truncates, in identifiable regions.
+
+  The live shape: x-kom's HDD/SSD category truncated at BOTH 150 and 250 elements, and
+  locating one capacity filter cost 50KB across three snapshots (16.5KB at 200, 12.5KB
+  at 150, 21.7KB at 250) -- because a truncated snapshot offers no continuation handle,
+  so the only moves are "re-request the whole thing bigger" or "guess a root=".
+  Meanwhile `root=` was passed on 11 of 165 snapshots despite 35 responses naming it.
+
+  Three clearly-separated regions, so a scoped snapshot can be compared against an
+  unscoped one for BOTH payload size and call count:
+
+  GROUND TRUTH:
+    #filters  ->  60 checkboxes (label + input), the region an agent actually wants
+    #results  -> 120 links, one per result card
+    #footer   ->  90 navigation links -- deliberately the kind of dense link matrix
+                  that must not be mistaken for the page's content
+    TOTAL interactive elements = 270, so max_elements=150 truncates and 250 also
+    truncates, exactly as the live page did.
+    A snapshot scoped to root="#filters" returns 60 and does NOT truncate.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  section { border: 1px solid #ddd; padding: 10px; margin-bottom: 14px; }
+  #footer a, #results a { display: inline-block; margin-right: 8px; }
+  label { display: inline-block; margin-right: 10px; }
+</style>
+</head>
+<body>
+<h1>Storage</h1>
+
+<section id="filters"><h2>Filters</h2></section>
+<section id="results"><h2>Results</h2></section>
+<section id="footer"><h2>More</h2></section>
+
+<script>
+  var CAPACITIES = ['500GB', '1TB', '2TB', '4TB', '6TB', '8TB', '10TB', '12TB', '14TB', '16TB'];
+
+  var filters = document.getElementById('filters');
+  for (var i = 0; i < 60; i++) {
+    var cap = CAPACITIES[i % CAPACITIES.length];
+    var label = document.createElement('label');
+    label.setAttribute('for', 'f' + i);
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = 'f' + i;
+    input.name = 'capacity';
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(' ' + cap + ' #' + i));
+    filters.appendChild(label);
+  }
+
+  var results = document.getElementById('results');
+  for (var j = 0; j < 120; j++) {
+    var a = document.createElement('a');
+    a.href = '/product/' + j;
+    a.textContent = 'Drive model ' + j;
+    results.appendChild(a);
+  }
+
+  var footer = document.getElementById('footer');
+  for (var k = 0; k < 90; k++) {
+    var f = document.createElement('a');
+    f.href = '/section/' + k;
+    f.textContent = 'Section ' + k;
+    footer.appendChild(f);
+  }
+</script>
+</body>
+</html>

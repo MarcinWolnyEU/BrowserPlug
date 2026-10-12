@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Page-World Expando Fixture</title>
+</head>
+<body>
+  <h1>Page-world expando fixture</h1>
+  <p id="carrier" data-marker="DISTINCTIVE_MARKER_PAGE_WORLD_EXPANDO">
+    A page script sets a NON-enumerable expando (__pageExpando) on this element —
+    a framework-internals analog (like el.__vueParentComponent). It is visible only
+    from the MAIN world; the isolated content-script world reads it as undefined.
+  </p>
+  <script>
+    // Set a non-enumerable expando on the DOM node from the PAGE's own script.
+    // Isolated-world reads (Xray vision) cannot see it; main-world reads can.
+    Object.defineProperty(document.getElementById('carrier'), '__pageExpando', {
+      value: { framework: 'fixture', n: 42 },
+      enumerable: false
+    });
+  </script>
+</body>
+</html>

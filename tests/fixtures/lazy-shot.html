@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lazy-shot fixture</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .spacer { height: 1600px; background: #ffffff; color: #111; padding: 12px; }
+  /* The lazy image is a known solid blue, served with a network delay below the
+     fold — so a full-page capture that does NOT settle would stitch it as black. */
+  #shotimg { display: block; width: 600px; height: 600px; }
+  .below { height: 400px; background: #ffffff; color: #111; padding: 12px; }
+</style>
+</head>
+<body>
+  <div class="spacer">LAZY_SHOT_TOP — DISTINCTIVE_MARKER_LAZY_SHOT</div>
+  <img id="shotimg" loading="lazy" src="/slow-image?ms=500&c=2266dd" width="600" height="600" alt="lazy blue">
+  <div class="below">LAZY_SHOT_BOTTOM</div>
+</body>
+</html>

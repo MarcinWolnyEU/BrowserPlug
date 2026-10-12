@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Silent Fail Login Fixture</title>
+  <style>
+    .ok { border: 2px solid green; background: #eaffea; }
+  </style>
+</head>
+<body>
+  <h1>Silent fail login fixture</h1>
+  <!--
+    The classic silent-failure trap: the login POST always returns 401 (the
+    fixtures server's /api/login), but the UI reacts to ANY response — even an
+    error — by putting a green "valid" check on the inputs. No navigation, no
+    error message. Only network visibility (requests tool / act network counters)
+    reveals the truth. Exactly one POST per click.
+  -->
+  <form id="login-form" onsubmit="return false;">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" autocomplete="off">
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="off">
+
+    <button type="button" id="login-btn">Log in</button>
+  </form>
+
+  <script>
+    document.getElementById('login-btn').addEventListener('click', function () {
+      var email = document.getElementById('email');
+      var password = document.getElementById('password');
+      fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.value, password: password.value })
+      }).then(function () {
+        // Silent failure: green check regardless of status (401 included)
+        email.classList.add('ok');
+        password.classList.add('ok');
+      }).catch(function () {
+        // Even a network error gets the green check — maximal silence
+        email.classList.add('ok');
+        password.classList.add('ok');
+      });
+    });
+  </script>
+</body>
+</html>

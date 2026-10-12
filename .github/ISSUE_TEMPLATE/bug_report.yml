@@ -1,0 +1,92 @@
+name: Bug report
+description: BrowserPlug crashed, a tool returned a wrong result, or it behaved differently from the documentation.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pull requests are not accepted, so an issue is the way to get a bug fixed.
+        Do not paste tokens, cookies, page contents or raw `/health` output. `/health` lists local paths, client command lines and the URLs of recent calls.
+        If the problem is "No extension connection available", press Reconnect in the extension popup first and run `python server/preflight.py --json` before you file anything.
+  - type: input
+    id: version
+    attributes:
+      label: BrowserPlug version
+      description: The extension version that `server_info` reports for your browser, and the server version.
+      placeholder: "extension 1.2.3, server 1.2.3"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      description: Name, version and engine (Gecko or Blink).
+      placeholder: Firefox 152 (Gecko), Chrome 140 (Blink), Zen, Firefox for Android
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, macOS 15, Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: The client driving the tools, and how it connects (stdio launcher or direct HTTP).
+      placeholder: Claude Code through the stdio launcher
+    validations:
+      required: false
+  - type: dropdown
+    id: python-setup
+    attributes:
+      label: Server Python setup
+      description: How the server's interpreter is provided (see docs/install.md).
+      options:
+        - uv environment (BROWSERPLUG_SERVER_PYTHON unset)
+        - venv (BROWSERPLUG_SERVER_PYTHON set)
+        - Other
+        - Not sure
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead. Quote error text exactly.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The tool calls or actions, in order. A minimal case is best.
+    validations:
+      required: true
+  - type: textarea
+    id: preflight
+    attributes:
+      label: Preflight output
+      description: Output of `python server/preflight.py --json`. It names local paths, so remove anything you do not want public.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log
+      description: The relevant lines from `browserplug-server.log`. The log contains local paths and client names, so redact them first.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: page
+    attributes:
+      label: Page involved
+      description: The site or page where it went wrong, if that matters. Remove anything private first.
+      render: markdown
+    validations:
+      required: false

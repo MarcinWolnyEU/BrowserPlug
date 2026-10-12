@@ -1,0 +1,20 @@
+name: Question
+description: How to set up or use BrowserPlug, what a result means, or whether it suits your case.
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        First check the README and the guides in `docs/`, starting with `docs/install.md`. Chat with an LLM while giving it a cloned copy of the repository. Still can't find the answers? Feel free to ask here.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What you're trying to do, and what you've tried, including pages of the docs you read and commands you ran. If setup is involved, name your browser, operating system and MCP client.

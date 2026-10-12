@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>The Complete Guide to WebSocket Reconnection — BrowserPlug Engineering Blog</title>
+  <meta name="author" content="Alex Rivera">
+  <meta property="article:published_time" content="2026-03-14T09:00:00Z">
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    header nav a { margin-right: 1em; }
+    .layout { display: flex; }
+    main { flex: 3; padding: 1em; }
+    aside { flex: 1; padding: 1em; background: #f4f4f4; }
+    footer { padding: 1em; background: #222; color: #ccc; }
+    table, th, td { border: 1px solid #999; border-collapse: collapse; padding: 4px 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Site">
+      <a href="/">Home</a>
+      <a href="/blog">Blog</a>
+      <a href="/docs">Docs</a>
+      <a href="/downloads">Downloads</a>
+      <a href="/community">Community</a>
+      <a href="/about">About</a>
+      <a href="/careers">Careers</a>
+      <a href="/contact">Contact</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <main>
+      <article>
+        <h1>The Complete Guide to WebSocket Reconnection</h1>
+        <p class="byline">By <span class="author" rel="author">Alex Rivera</span> · <time datetime="2026-03-14">March 14, 2026</time> · 9 min read</p>
+
+        <p>WebSocket connections fail. They fail when laptops close their lids, when phones
+        wander between cell towers, when corporate proxies decide that ninety seconds of
+        idleness is suspicious, and when a load balancer quietly recycles the backend your
+        socket happened to be pinned to. A connection that has been open for an hour is not
+        evidence that it will be open one second from now. Any production system built on
+        WebSockets therefore needs a reconnection strategy that is deliberate rather than
+        accidental, and the difference between the two is the difference between a product
+        that feels alive and one that silently goes stale while the user keeps typing into
+        the void.</p>
+
+        <p>This guide walks through the full lifecycle of a robust reconnection layer: how
+        to detect that a connection has actually died, how to schedule retries without
+        stampeding your own servers, how to resynchronize state once you are back, and how
+        to communicate all of this to the human staring at the screen. The advice here is
+        battle-tested across browser extensions, mobile clients, and server-to-server
+        meshes, and although the code samples use the browser WebSocket API, every pattern
+        translates directly to ws libraries in Node, Python, or Go.</p>
+
+        <p>The first and most underrated problem is detection. TCP is designed to survive
+        silence, which means a dead connection often looks identical to a quiet one. If the
+        remote peer vanishes without sending a FIN — a yanked cable, a suspended laptop, a
+        NAT table that expired — your socket object will happily report itself as open for
+        minutes or, in pathological cases, forever. The close event you are waiting for may
+        simply never arrive. The only reliable cure is an application-level heartbeat: the
+        client sends a small ping frame on a fixed interval, the server echoes a pong, and
+        the client treats a missing pong within a timeout window as a death sentence. Keep
+        the interval generous enough not to burden mobile radios — fifteen to thirty seconds
+        is typical — and keep the timeout at roughly twice the interval so a single delayed
+        packet does not trigger a false positive.</p>
+
+        <h2>Backoff, jitter, and the thundering herd</h2>
+
+        <p>Once you know the connection is dead, the temptation is to reconnect immediately
+        and retry in a tight loop until it works. This is how you turn a sixty-second server
+        deploy into a self-inflicted denial-of-service attack. When a popular service drops
+        ten thousand clients at once and all ten thousand retry on the same fixed schedule,
+        the reconnection spikes arrive as synchronized waves that can keep a recovering
+        backend pinned to the floor. The industry-standard answer is exponential backoff
+        with jitter: each consecutive failure doubles the base delay, and a random factor
+        spreads the actual retry instants across the window so the herd never stampedes in
+        step.</p>
+
+        <p>A good implementation also distinguishes between failure modes. A socket that
+        connected successfully and then dropped after ten minutes deserves a fast first
+        retry — the network blip is probably already over. A socket that has failed its
+        handshake five times in a row should be backing off toward a ceiling of thirty or
+        sixty seconds. Resetting the backoff counter only after the connection has proven
+        itself stable for some grace period, rather than immediately upon connecting,
+        prevents a flapping link from oscillating between instant retries and long waits.</p>
+
+        <ul>
+          <li>Start with a base delay of about one second and double it on every consecutive failure.</li>
+          <li>Cap the delay at a sane ceiling — thirty to sixty seconds for interactive apps.</li>
+          <li>Apply full jitter: pick a uniform random delay between zero and the current cap.</li>
+          <li>Reset the counter only after the new connection survives a grace period, not at the moment of connecting.</li>
+          <li>Stop retrying entirely on fatal errors such as authentication rejection, and surface those to the user instead.</li>
+        </ul>
+
+        <p>Here is a compact reference implementation of the scheduling core. It is
+        deliberately framework-free; the same twenty lines have shipped inside browser
+        extensions and Electron apps alike:</p>
+
+        <pre><code>class Reconnector {
+  constructor(connect, { base = 1000, cap = 30000 } = {}) {
+    this.connect = connect;
+    this.base = base;
+    this.cap = cap;
+    this.attempt = 0;
+  }
+  schedule() {
+    const exp = Math.min(this.cap, this.base * 2 ** this.attempt);
+    const delay = Math.random() * exp; // full jitter
+    this.attempt += 1;
+    this.timer = setTimeout(() => this.connect(), delay);
+  }
+  markStable() {
+    // call after the socket has been healthy for a grace period
+    this.attempt = 0;
+  }
+  stop() { clearTimeout(this.timer); }
+}</code></pre>
+
+        <p>Notice what the class does not do: it never inspects the close code itself.
+        Deciding whether a disconnect is retryable is policy, and policy belongs to the
+        caller. Close code 1000 after an explicit logout should not trigger a retry; close
+        code 1006 after a network change almost always should. Keeping the scheduler dumb
+        and the policy explicit makes both halves trivially testable.</p>
+
+        <h2>Resynchronizing state after reconnect</h2>
+
+        <p>Reconnecting the transport is the easy half. The hard half is answering the
+        question the application immediately asks: what did I miss? If the server pushes
+        incremental updates — chat messages, presence changes, document operations — a
+        client that was offline for forty seconds has a gap, and pretending otherwise leads
+        to the most painful class of bugs: state that is silently, persistently wrong. The
+        three workable strategies, in increasing order of sophistication, are full refetch,
+        sequence-numbered replay, and server-side session resumption. Full refetch is crude
+        but unbeatable for correctness: on every reconnect, throw the local cache away and
+        ask for the world again. Sequence numbering tags every server push with a
+        monotonically increasing id; the client sends the last id it saw during the
+        handshake and the server replays the gap from a ring buffer. Session resumption
+        moves the burden entirely server-side, keeping per-client cursors alive for a grace
+        window so the reconnecting client appears, from the application's point of view,
+        never to have left.</p>
+
+        <p>Whichever strategy you choose, queue outbound messages while disconnected and
+        flush them after resync completes — not before, or your messages may reference state
+        the server has since invalidated. Cap the queue and tell the user when it overflows.
+        An honest "reconnecting, 3 messages pending" badge beats a silent buffer that
+        discards work. The table below summarizes the trade-offs we have observed in
+        production deployments of each approach.</p>
+
+        <table>
+          <thead>
+            <tr><th>Strategy</th><th>Server cost</th><th>Client complexity</th><th>Gap correctness</th><th>Best for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Full refetch</td><td>High per reconnect</td><td>Trivial</td><td>Perfect</td><td>Small state, rare drops</td></tr>
+            <tr><td>Sequence replay</td><td>Ring buffer memory</td><td>Moderate</td><td>Perfect within window</td><td>Event streams, chat</td></tr>
+            <tr><td>Session resumption</td><td>Per-client cursors</td><td>Low</td><td>Perfect within TTL</td><td>Collaborative editing</td></tr>
+            <tr><td>Ignore the gap</td><td>None</td><td>None</td><td>Wrong</td><td>Pure ephemeral data only</td></tr>
+          </tbody>
+        </table>
+
+        <p>One final piece deserves more attention than it gets: telling the user the truth.
+        A connection indicator with three honest states — connected, reconnecting with a
+        countdown, and gave-up-retry-manually — converts a frustrating mystery into a
+        comprehensible situation, and gives the user an explicit lever to pull instead of a
+        page reload of last resort. Pair the indicator with the browser's online and
+        offline events to skip pointless retries while the machine knows it has no network
+        at all, and you have covered the overwhelming majority of real-world disconnection
+        scenarios with perhaps two hundred lines of deliberate code. The patterns are not
+        glamorous, but they are the difference between software that degrades gracefully
+        and software that quietly lies about being alive.</p>
+      </article>
+    </main>
+
+    <aside aria-label="Related posts">
+      <h3>Related posts</h3>
+      <ul>
+        <li><a href="/blog/heartbeats">Designing Heartbeat Protocols</a></li>
+        <li><a href="/blog/backoff">Exponential Backoff in Practice</a></li>
+        <li><a href="/blog/offline-first">Offline-First Architectures</a></li>
+        <li><a href="/blog/load-balancers">WebSockets Behind Load Balancers</a></li>
+      </ul>
+      <h3>Newsletter</h3>
+      <p>Get our engineering posts in your inbox.</p>
+    </aside>
+  </div>
+
+  <footer>
+    <p>© 2026 BrowserPlug Engineering Blog · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/rss">RSS</a></p>
+  </footer>
+</body>
+</html>

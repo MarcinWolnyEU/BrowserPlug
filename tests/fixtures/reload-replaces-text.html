@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Reload Replaces Text Fixture</title>
+</head>
+<body>
+  <h1>Reload replaces text fixture</h1>
+  <!--
+    First load renders "STATE:OLD"; any subsequent load (i.e. a reload) renders
+    "STATE:NEW" — but only after a 300ms tick, so right after the reload commit
+    the #state div is briefly EMPTY. Reproduces the stale-DOM trap: a tool that
+    reads immediately after reload sees neither value (or worse, a cached OLD).
+  -->
+  <div id="state"></div>
+  <script>
+    var visited = sessionStorage.getItem('browserplug_reload_fixture_visited');
+    var value = visited ? 'STATE:NEW' : 'STATE:OLD';
+    sessionStorage.setItem('browserplug_reload_fixture_visited', '1');
+    setTimeout(function () {
+      document.getElementById('state').textContent = value;
+    }, 300);
+  </script>
+</body>
+</html>

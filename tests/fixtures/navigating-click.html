@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clicks that navigate out from under the injected script</title>
+<!--
+  Fixture: the ACTUAL root cause, not a proxy for it.
+
+  delayed-settle-past-timeout.html reproduces the symptom by holding the main
+  thread. This one reproduces the mechanism: the click commits a navigation, so the
+  document the automation toolkit was injected into is torn down mid-call and the
+  injection promise may never settle. That is what produced the bare
+  "Request timed out after 22.1 seconds" in the field.
+
+  The contract under test is deliberately outcome-agnostic, because the platform
+  gets to decide whether the promise rejects, resolves late, or hangs — and that
+  answer may differ by engine and by Firefox version. What must hold either way:
+  the agent is NEVER left with a timeout carrying no page context. Either the step
+  succeeds and reports the navigation, or it times out AND names where the tab
+  ended up.
+
+    #go-away    a plain anchor to another page. The ordinary case.
+    #go-wrong   looks like an in-page variant switch ("16TB") but navigates to a
+                DIFFERENT product — the worst observed case, where a timed-out
+                click silently moved the session onto the wrong item. The
+                destination is titled.html?product=seagate-exos-16tb so a test can
+                assert the report names where it actually landed.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  a, button { display: inline-block; margin: 8px 12px 8px 0; }
+</style>
+</head>
+<body>
+<h1>Dysk twardy WD WD120EDAZ 12TB</h1>
+<p id="price">953,67 zl</p>
+
+<a id="go-away" href="titled.html">Zobacz inny dysk</a>
+
+<!-- A "variant" control that is really a link to an unrelated listing. -->
+<button type="button" id="go-wrong">16TB</button>
+
+<script>
+  document.getElementById('go-wrong').addEventListener('click', function () {
+    // Synchronous navigation inside the handler: the injected script is still
+    // awaiting its post-click settle when the document starts going away.
+    location.href = 'titled.html?product=seagate-exos-16tb';
+  });
+</script>
+</body>
+</html>

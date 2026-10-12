@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Counted load-more</title>
+<!--
+  Fixture: "an action should report what it CHANGED, not merely that it ran".
+
+  The live shape this reproduces: euro.com.pl's "Pokaz wiecej produktow" button, where
+  page_act returned `OK: 1/1` for a click that loaded 8 more products AND for a click
+  that matched nothing at all. Both are 96-byte successes, so the agent spent a second
+  full round trip on page_eval(...length) after EVERY click to find out which had
+  happened -- 64 of 101 acts in the corpus were followed by exactly such a probe.
+
+  Two buttons, deliberately indistinguishable from their responses today:
+
+    #load-more   appends EXACTLY 8 rows, after a 900ms delay. The delay matters: it is
+                 longer than the ~600ms default click settle window, so a naive
+                 implementation that samples immediately sees NO change and would report
+                 the working button as having done nothing.
+    #no-op       is a real, enabled, clickable button that appends nothing at all. It
+                 mutates an attribute on itself (a focus/pressed marker) so that a
+                 crude "did any mutation fire?" check is NOT sufficient to tell it apart
+                 from #load-more -- domChanged is true for both. Only a COUNT
+                 distinguishes them, which is the point of the story.
+
+  GROUND TRUTH:
+    initial .product rows           = 12
+    after one #load-more click      = 20   (+8)
+    after two #load-more clicks     = 28   (+8)
+    after any number of #no-op clicks = unchanged
+    #load-more disables itself once 28 rows are present (nothing more to load)
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  .product { border-bottom: 1px solid #ddd; padding: 6px 0; }
+  button { margin: 12px 8px 12px 0; padding: 6px 12px; }
+  button[disabled] { opacity: .5; }
+</style>
+</head>
+<body>
+<h1>Products</h1>
+<div id="grid"></div>
+<button id="load-more">Show more products</button>
+<button id="no-op">Refine (does nothing)</button>
+<p id="status">ready</p>
+
+<script>
+  var BATCH = 8;
+  var INITIAL = 12;
+  var MAX = 28;
+  var grid = document.getElementById('grid');
+  var loadMore = document.getElementById('load-more');
+  var noOp = document.getElementById('no-op');
+  var status = document.getElementById('status');
+  var n = 0;
+
+  function addRows(count) {
+    for (var i = 0; i < count; i++) {
+      n++;
+      var row = document.createElement('div');
+      row.className = 'product';
+      row.textContent = 'Product ' + n;
+      grid.appendChild(row);
+    }
+    status.textContent = n + ' products';
+  }
+
+  addRows(INITIAL);
+
+  loadMore.addEventListener('click', function () {
+    if (n >= MAX) return;
+    // Deliberately slower than the default post-click settle window, so that a
+    // delta measured too eagerly reports a working button as inert.
+    setTimeout(function () {
+      addRows(Math.min(BATCH, MAX - n));
+      if (n >= MAX) loadMore.disabled = true;
+    }, 900);
+  });
+
+  noOp.addEventListener('click', function () {
+    // A real mutation that changes NOTHING the agent cares about. This is why
+    // domChanged alone cannot answer "did the click accomplish anything".
+    noOp.setAttribute('data-clicked-at', String(n));
+  });
+</script>
+</body>
+</html>

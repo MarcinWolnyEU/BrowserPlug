@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Many Identical Controls Fixture</title>
+</head>
+<body>
+  <h1>Many identical controls fixture</h1>
+  <p>400 identical "Add" buttons (snapshot dedupe stress test) plus 3 unique controls.</p>
+
+  <button type="button" id="save-all">Save all</button>
+  <input type="text" id="search" aria-label="Search items">
+  <a href="#settings" id="settings">Settings</a>
+
+  <div id="grid"></div>
+  <script>
+    var grid = document.getElementById('grid');
+    for (var i = 0; i < 400; i++) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Add';
+      b.className = 'add-btn';
+      b.dataset.index = i;
+      grid.appendChild(b);
+    }
+  </script>
+</body>
+</html>

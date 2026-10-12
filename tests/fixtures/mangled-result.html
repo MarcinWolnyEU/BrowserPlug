@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Search results</title>
+<!--
+  Fixture: the page a query-mangling redirect lands on.
+
+  Reached only via conftest's /mangle-query route, which 308s to HERE after dropping
+  one query parameter and re-encoding another. Nothing about THIS page is wrong: it
+  renders cleanly, extracts cleanly, and reports a plausible result count. That is the
+  entire point. The degradation is invisible in the body and visible only by comparing
+  the requested URL to the landed one, which is what the live allegro.pl incident proved
+  when a filtered 79-offer query silently became an unfiltered 14-offer one and the
+  cheapest price from the wrong set was reported to the user as the answer.
+
+  GROUND TRUTH: this page always claims 14 results, whatever the query says.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  .count { font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>Search results</h1>
+<p class="count">14 results</p>
+<ul>
+  <li>Result one — 5045</li>
+  <li>Result two — 5199</li>
+  <li>Result three — 5399</li>
+</ul>
+<p>These results reflect whatever query actually reached the server, which is not
+necessarily the query that was requested.</p>
+</body>
+</html>

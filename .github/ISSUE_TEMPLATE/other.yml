@@ -1,0 +1,29 @@
+name: Other
+description: Feature ideas, documentation problems, or anything else.
+title: "[Other]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pull requests are not accepted, so an issue is the way to suggest a change.
+        BrowserPlug keeps a small tool surface. A request for a new tool or a new tool parameter should say which existing tool could carry it instead.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Feature idea
+        - Request for example
+        - Request for documentation
+        - Request for support for another browser or MCP client
+        - Request for comment
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For a feature idea, describe what you're trying to do, not only the change you have in mind. If it touches the tool surface, say which existing tool it belongs to.
+    validations:
+      required: true

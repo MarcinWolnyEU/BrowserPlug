@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Deferred render</title>
+<!--
+  Fixture: "a silent empty read is indistinguishable from a genuinely empty page".
+
+  The live shapes this reproduces, all of which returned a clean, successful,
+  entirely useless result:
+    morele.net search  -> 290 chars containing only a live-chat modal, zero products
+    two reddit URLs    -> the literal string "5.24.10" (the site's version number)
+    sipeed.com/en      -> 140 chars of chrome on a page full of content
+    aopen.com/en       -> the 81-char body "Server Error"
+  Nothing distinguished "this page genuinely has 7 characters" from "extraction failed
+  on a page with 400 product nodes".
+
+  This page is that second case, deterministically: at DOMContentLoaded the extractable
+  text is a few dozen characters of chrome, while the document already holds a large
+  node count. The real content mounts 1200ms later. A read taken in between returns
+  almost nothing and looks perfectly healthy.
+
+  GROUND TRUTH:
+    before mount:  #app is empty; document node count is already > 250 (the skeleton);
+                   extractable text is ONLY the chat-widget line, < 120 chars
+    after mount:   40 .product rows, each with a title and a price, > 1500 chars
+    mount delay:   1200ms after DOMContentLoaded
+  The assertion is the DISCREPANCY -- few extracted characters against many DOM nodes --
+  not any absolute character count.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  .skeleton { display: block; height: 14px; background: #eee; margin: 4px 0; }
+  .chat { position: fixed; right: 10px; bottom: 10px; }
+  .product { padding: 4px 0; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- A large, text-free skeleton: many nodes, nothing to extract. This is what makes
+     the node-count-vs-extracted-characters discrepancy real rather than contrived. -->
+<div id="skeleton" aria-hidden="true">
+  <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+  <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+  <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+  <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+</div>
+
+<div class="chat">Need help? Chat with us</div>
+
+<script>
+  // Pad the skeleton to a genuinely large node count without adding any text.
+  var sk = document.getElementById('skeleton');
+  for (var i = 0; i < 260; i++) {
+    var s = document.createElement('span');
+    s.className = 'skeleton';
+    sk.appendChild(s);
+  }
+
+  // The content the agent actually wants, mounted well after load.
+  setTimeout(function () {
+    var app = document.getElementById('app');
+    var html = '<h1>Products</h1>';
+    for (var i = 1; i <= 40; i++) {
+      html += '<div class="product"><span class="title">Deferred product ' + i +
+              '</span> <span class="price">' + (99 + i) + ',00 zl</span></div>';
+    }
+    app.innerHTML = html;
+    document.getElementById('skeleton').remove();
+  }, 1200);
+</script>
+</body>
+</html>

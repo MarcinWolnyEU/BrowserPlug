@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Reactive Input Fixture</title>
+</head>
+<body>
+  <h1>Reactive input fixture</h1>
+  <!--
+    Emulates a framework-controlled input (React/Vue v-model): the visible mirror
+    updates ONLY in response to a real 'input' event. A naive `el.value = x`
+    assignment does NOT fire 'input', so the mirror stays empty - which is exactly
+    the failure mode page_fill must avoid (it dispatches input/change after using
+    the native value setter).
+  -->
+  <label for="reactive">Reactive field</label>
+  <input type="text" id="reactive" name="reactive">
+  <div>Model value: <span id="mirror"></span></div>
+
+  <script>
+    var input = document.getElementById('reactive');
+    var mirror = document.getElementById('mirror');
+    input.addEventListener('input', function () {
+      mirror.textContent = input.value;
+    });
+  </script>
+</body>
+</html>

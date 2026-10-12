@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Filter sidebar: three ways a checkbox click can lie</title>
+<!--
+  Fixture: the filter-sidebar shapes where a click "succeeds" at the event layer
+  and changes nothing. All three labels are VISIBLE and snapshot-targetable, which is
+  exactly why the failure is invisible without a state check.
+
+    #ok-*        a real <label for> + <input>. Clicking it toggles. Must stay ok:true,
+                 and must report the resulting checked state.
+    #dangling-*  a <label for="cap-4000"> whose input is NOT in the document — the
+                 virtualized sidebar: inputs render only once the section expands.
+                 Clicking it can never toggle anything. Must be a loud failure.
+    #dead-*      a div[role=checkbox] whose handler does nothing (aria-checked never
+                 moves). The x-kom shape: nine clicks, nine "ok", zero filters applied.
+    #expand      expands the virtualized section, materialising #cap-4000 — the
+                 recovery the error message tells the agent to perform.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  fieldset { border: 1px solid #ccc; margin-bottom: 12px; }
+  label { display: block; padding: 4px 0; cursor: pointer; }
+  /* the design-system pattern: the real input is hidden and the label is styled */
+  .styled input { position: absolute; opacity: 0; width: 0; height: 0; }
+  [role=checkbox] { padding: 4px 0; cursor: pointer; }
+  #results { margin-top: 16px; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>Dyski HDD</h1>
+
+<fieldset>
+  <legend>Stan</legend>
+  <div class="styled">
+    <label id="ok-label" for="ok-used">uzywane (49)</label>
+    <input id="ok-used" type="checkbox">
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Pojemnosc</legend>
+  <button type="button" id="expand">Pojemnosc (rozwin)</button>
+  <!-- The input this names does not exist until #expand is clicked. -->
+  <label id="dangling-label" for="cap-4000">4000 GB (13)</label>
+  <div id="cap-slot"></div>
+</fieldset>
+
+<fieldset>
+  <legend>Producent</legend>
+  <div id="dead-checkbox" role="checkbox" aria-checked="false" tabindex="0">Western Digital (21)</div>
+</fieldset>
+
+<div id="results">111 produktow</div>
+
+<script>
+  // The working control narrows the result count — proof the filter really applied.
+  document.getElementById('ok-used').addEventListener('change', function () {
+    document.getElementById('results').textContent = this.checked ? '49 produktow' : '111 produktow';
+  });
+
+  // Expanding materialises the input the dangling label names.
+  document.getElementById('expand').addEventListener('click', function () {
+    if (document.getElementById('cap-4000')) return;
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = 'cap-4000';
+    document.getElementById('cap-slot').appendChild(input);
+  });
+
+  // The dead control: a handler that runs and accomplishes nothing. It deliberately
+  // does NOT touch aria-checked — this is the silent no-op being detected.
+  document.getElementById('dead-checkbox').addEventListener('click', function () {
+    /* the site binds its real handler somewhere else entirely */
+  });
+</script>
+</body>
+</html>

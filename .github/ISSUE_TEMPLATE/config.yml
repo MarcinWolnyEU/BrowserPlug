@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Install and troubleshooting guide
+    url: https://github.com/MarcinWolnyEU/browserplug/blob/main/docs/install.md
+    about: Setup steps for the server, the extension and MCP clients, plus a troubleshooting table.
+  - name: Running and configuring the server
+    url: https://github.com/MarcinWolnyEU/browserplug/blob/main/docs/server.md
+    about: Ports, environment variables, logs and what to do when the server misbehaves.

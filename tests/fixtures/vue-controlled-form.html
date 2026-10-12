@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Vue Controlled Form Fixture</title>
+  <script src="vendor/vue.global.prod.js"></script>
+</head>
+<body>
+  <h1>Vue controlled form fixture</h1>
+  <!--
+    HONEST Vue 3 fixture: v-model-bound input and radio group; the Submit
+    button's :disabled is computed from reactive state (NOT from the DOM).
+    A naive `el.value = "x"` mutation does not fire 'input', so the model stays
+    empty and Submit stays disabled — only native-setter + dispatched events work.
+  -->
+  <div id="app">
+    <form @submit.prevent>
+      <label for="project-name">Project name</label>
+      <input id="project-name" type="text" v-model="name">
+
+      <fieldset>
+        <legend>Plan</legend>
+        <label><input type="radio" name="plan" value="free" v-model="plan"> Free</label>
+        <label><input type="radio" name="plan" value="pro" v-model="plan"> Pro</label>
+      </fieldset>
+
+      <button type="button" id="submit-btn" :disabled="!canSubmit" @click="submit">Submit</button>
+    </form>
+  </div>
+  <div id="form-result"></div>
+
+  <script>
+    var createApp = Vue.createApp;
+    createApp({
+      data: function () {
+        return { name: '', plan: '' };
+      },
+      computed: {
+        canSubmit: function () {
+          return this.name.length > 0 && this.plan.length > 0;
+        }
+      },
+      methods: {
+        submit: function () {
+          document.getElementById('form-result').textContent =
+            JSON.stringify({ name: this.name, plan: this.plan });
+        }
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

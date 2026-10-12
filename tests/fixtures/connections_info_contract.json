@@ -1,0 +1,259 @@
+{
+  "_source": "server/server.py :: BrowserPlugServer.get_connections_info()",
+  "_purpose": [
+    "ONE source of truth for the connections payload, sitting between the Python that",
+    "EMITS it and the JavaScript that RENDERS it. Before this file the JS tests froze the",
+    "payload by hand, so a server-side key rename kept them green while the real options-page",
+    "map and the real popup panel broke.",
+    "",
+    "Both ends are held to it:",
+    "  * tests/unit/test_connections_contract.py calls the REAL get_connections_info() and",
+    "    asserts its output conforms -> a Python rename fails there.",
+    "  * tests/js/options-map.test.mjs and tests/js/popup.test.mjs validate their hand-written",
+    "    fixtures against this file (tests/js/contract.mjs) -> a contract updated without the",
+    "    JS fixtures following fails there.",
+    "Renaming a key therefore costs three edits (emitter, contract, fixtures) and cannot be",
+    "done silently in one."
+  ],
+  "_consumers": [
+    "extension-gecko/options.js  - the Health tab's connection map (renderConnectionMap et al.)",
+    "extension-gecko/popup/popup.js - the Connections panel (updateConnections / buildConnectionCopyNode)",
+    "server/server.py - /health re-exports connections / extension_instances / last_command"
+  ],
+  "_types": {
+    "string": "str / JS string",
+    "int": "Python int (never bool) / JS integral number",
+    "number": "Python int|float / JS number - used where int-vs-float is not load-bearing",
+    "bool": "Python bool / JS boolean",
+    "object": "Python dict / JS plain object",
+    "array": "Python list / JS Array",
+    "null": "Python None / JS null (an ABSENT key is not the same thing - see `optional`)"
+  },
+  "_schema": {
+    "required": "key -> allowed types. The key MUST be present. Absence is a contract breach.",
+    "optional": "key -> allowed types. May be absent; when present it must type-check, and its name is a known key (so a fixture carrying it is not carrying a typo).",
+    "of": "for an array key: every element must conform to the named object.",
+    "discriminator": "for a heterogeneous array: the key whose value picks the element's object."
+  },
+
+  "root": "payload",
+
+  "objects": {
+    "payload": {
+      "_comment": "The dict get_connections_info() returns. `requester_slot` is NOT one of its keys: server.py's `server.get_connections` WS relay (~:1403) grafts it on afterwards, and the options page's /health fallback synthesizes it as null. So it is optional here and the Python test asserts the emitter does NOT invent it.",
+      "required": {
+        "count": ["int"],
+        "generated_hms": ["string", "null"],
+        "generated_epoch": ["number"],
+        "connections": ["array"],
+        "last_command": ["object", "null"],
+        "extension_instances": ["array"],
+        "version_warning": ["string", "null"],
+        "browser_concurrency": ["object"]
+      },
+      "optional": {
+        "requester_slot": ["int", "null"]
+      },
+      "arrays": {
+        "connections": { "discriminator": "kind", "of": {
+          "server": "server_row",
+          "extension": "extension_row",
+          "mcp_client": "mcp_client_row"
+        } },
+        "extension_instances": { "of": "extension_instance" }
+      },
+      "children": {
+        "last_command": "last_command"
+      }
+    },
+
+    "server_row": {
+      "_comment": "The server process's own row (kind='server'). `version` is shared-py/browserplug_shared/version.py - the SAME number the launcher reports and both manifests carry (parity invariant H).",
+      "required": {
+        "kind": ["string"],
+        "label": ["string"],
+        "pid": ["int"],
+        "version": ["string"],
+        "exe_path": ["string", "null"],
+        "activity_hms": ["string", "null"],
+        "activity_epoch": ["number"],
+        "since_hms": ["string", "null"],
+        "detail": ["string"]
+      }
+    },
+
+    "extension_row": {
+      "_comment": "One row per CONNECTED browser (kind='extension'). `slot` - not `pid` - correlates it with its extension_instance: a REMOTE browser has no pid. `engine`/`platform`/`browser_info` are what the browser said about ITSELF in its hello, and for a remote one they are the only identification there is - no pid, no exe path, no start time - so the popup prints them in the row's tooltip and in its copied block. `browser_info` is passed through whole (a gecko fork's identity hides in a key of its own); `version` is the EXTENSION's build, not the browser's, which lives in browser_info.version. All four are null on a browser that never sent them.",
+      "required": {
+        "kind": ["string"],
+        "label": ["string"],
+        "slot": ["int"],
+        "is_remote": ["bool"],
+        "remote_addr": ["string", "null"],
+        "pid": ["int", "null"],
+        "exe_path": ["string", "null"],
+        "engine": ["string", "null"],
+        "platform": ["object", "null"],
+        "browser_info": ["object", "null"],
+        "version": ["string", "null"],
+        "activity_hms": ["string", "null"],
+        "activity_epoch": ["number"],
+        "since_hms": ["string", "null"],
+        "detail": ["string"]
+      }
+    },
+
+    "mcp_client_row": {
+      "_comment": "One row per MCP client PROCESS (kind='mcp_client'); its sessions are collapsed into `sessions`. `launcher_pid` is the stdio proxy between it and the server (null = a direct HTTP client, e.g. GitLab Duo) - the map draws it as its own hop. `launcher_version` is what that process reports on its /health poll; null means it never did, i.e. a launcher older than version reporting. provider/model come from the Kilo CLI, pi and GitHub Copilot Chat detectors and are best-effort: absent on any miss. `copilot` is the Copilot Chat detector's whole answer (see copilot_session); on those rows `cwd` and `label` name the window's workspace instead of the VS Code install dir. `target_browser_slot` is the browser this client's tool calls are routed to right now (null = nothing connected, or its selection points at a departed browser, in which case its calls error rather than route elsewhere); `target_browser_explicit` says whether that was a browsers(action='use') choice or just the default - the connection map draws the routing line from them. `cmdline` is the process's argv with secret-looking values masked (server.py :: _sanitized_cmdline), the field the popup's copied row leans on to identify a client running under a generic interpreter: exe_path for any node CLI is just node.exe. null when psutil could not read it. `vendor` is who ships the client (server.py :: _CLIENT_VENDORS), keyed on `friendly`; null for any client we could not name, which is why the popup prints it as an extra fact rather than laying the row out around it.",
+      "required": {
+        "kind": ["string"],
+        "label": ["string"],
+        "friendly": ["string"],
+        "vendor": ["string", "null"],
+        "cwd": ["string", "null"],
+        "pid": ["int", "null"],
+        "launcher_pid": ["int", "null"],
+        "launcher_version": ["string", "null"],
+        "launcher_since_hms": ["string", "null"],
+        "target_browser_slot": ["int", "null"],
+        "target_browser_explicit": ["bool"],
+        "exe_path": ["string", "null"],
+        "cmdline": ["string", "null"],
+        "since_hms": ["string", "null"],
+        "started_hms": ["string", "null"],
+        "session_count": ["int"],
+        "sessions": ["array"],
+        "activity_hms": ["string", "null"],
+        "activity_epoch": ["number"],
+        "detail": ["string"]
+      },
+      "optional": {
+        "provider": ["string", "null"],
+        "model": ["string", "null"],
+        "copilot": ["object", "null"]
+      },
+      "arrays": {
+        "sessions": { "of": "session" }
+      },
+      "children": {
+        "copilot": "copilot_session"
+      }
+    },
+
+    "copilot_session": {
+      "_comment": "GitHub Copilot Chat rows only (server/usage_panels/copilot_data.py :: detect_session), under the same kilo_details gate as provider/model. Every key is always present; all but `requests` may be null. `requests` counts the window's successful chat requests in the log tail; `chat_title`/`chat_turns` come from the Copilot session matched to this window; `workspace` is that session's cwd, else the folder the extension host's children run in.",
+      "required": {
+        "model": ["string", "null"],
+        "account": ["string", "null"],
+        "sku": ["string", "null"],
+        "requests": ["int"],
+        "last_request_hms": ["string", "null"],
+        "chat_title": ["string", "null"],
+        "chat_turns": ["int", "null"],
+        "workspace": ["string", "null"]
+      }
+    },
+
+    "session": {
+      "required": {
+        "id": ["string"],
+        "last_activity_hms": ["string"],
+        "commands": ["array"]
+      },
+      "arrays": {
+        "commands": { "of": "command" }
+      }
+    },
+
+    "command": {
+      "_comment": "`params` is _format_args()'s compact dict; the JS renders it verbatim and tolerates a string.",
+      "required": {
+        "time_hms": ["string"],
+        "tool": ["string", "null"],
+        "params": ["object", "string", "null"]
+      }
+    },
+
+    "extension_instance": {
+      "_comment": "The browser registry, one entry per known browser (connected or not - see currently_connected). `last_activity_epoch` counts REAL browser commands only, so the map does not light an edge on its own polling. `version` is the EXTENSION's (manifest.json); everything else describes the BROWSER - the map draws the two as separate boxes. windows/tabs/active_tabs/loaded_tabs/state_hms come from the extension's browser_state pushes: null until the first one lands (or on an extension too old to send them). `active_tab_list` is one {id, title, last_hms} entry per window's foreground tab (last_hms is on the BROWSER's clock, null when nothing is known about that tab); [] means 'none', null means 'this extension never said'. The OPTIONAL keys are connection forensics, added in 1.8.8 (`encrypted` in 1.9: the socket carries only sealed records) and optional so the hand-written JS fixtures do not each have to carry them: last_disconnect_hms/last_close_code/last_close_reason describe the PREVIOUS drop and survive the reconnect that replaced it; hello_latency_ms is socket accept -> valid hello; reported_journal is the extension's own [{t,e,code?,reason?,attempt?}] account of what happened while it was away (server/ws/connection_log.py), which is the only artifact that survives a browser being killed.",
+      "required": {
+        "slot": ["int"],
+        "pid": ["int", "null"],
+        "name": ["string"],
+        "friendly": ["string"],
+        "version": ["string", "null"],
+        "windows": ["int", "null"],
+        "tabs": ["int", "null"],
+        "active_tabs": ["int", "null"],
+        "loaded_tabs": ["int", "null"],
+        "active_tab_list": ["array", "null"],
+        "state_hms": ["string", "null"],
+        "exe_path": ["string", "null"],
+        "last_connect_hms": ["string", "null"],
+        "connect_count": ["int"],
+        "last_activity_hms": ["string", "null"],
+        "last_activity_epoch": ["number", "null"],
+        "last_action": ["string", "null"],
+        "remote_addr": ["string", "null"],
+        "is_remote": ["bool"],
+        "currently_connected": ["bool"]
+      },
+      "optional": {
+        "last_disconnect_hms": ["string", "null"],
+        "last_close_code": ["int", "null"],
+        "last_close_reason": ["string", "null"],
+        "hello_latency_ms": ["int", "null"],
+        "reported_journal": ["array", "null"],
+        "encrypted": ["bool"]
+      }
+    },
+
+    "last_command": {
+      "_comment": "_last_command_info(). Two shapes, one key set: the newest MCP call's WS-level record, OR - when that call never touched a browser (browsers, server_info) - the call record itself with action/ack null. browser_slot/launcher_pid/timings are attached ONLY when the timing record matches this command (_attach_call_timings), hence optional.",
+      "required": {
+        "tool": ["string", "null"],
+        "action": ["string", "null"],
+        "params": ["object", "string", "null"],
+        "at": ["string", "null"],
+        "client_pid": ["int", "null"],
+        "session": ["string", "null"],
+        "acknowledged_by_extension": ["bool", "null"],
+        "acknowledged_at": ["string", "null"],
+        "outcome": ["object", "null"]
+      },
+      "optional": {
+        "browser_slot": ["int", "null"],
+        "launcher_pid": ["int", "null"],
+        "timings": ["object", "null"]
+      },
+      "children": {
+        "timings": "timings",
+        "outcome": "outcome"
+      }
+    },
+
+    "outcome": {
+      "_comment": "The structured verdict for THIS call, written by ToolOutcomeMiddleware via mcp_tools._record_outcome. The agent learns a call failed from the MCP isError flag, but an MCP error result carries no _meta - so an operator/monitor can only learn it here. null when no tool call has completed yet. failed=false with a non-empty degraded list is a SUCCESS that returned less than it was asked for (truncated, empty extraction, unsettled).",
+      "required": {
+        "failed": ["bool"],
+        "code": ["string", "null"],
+        "retryable": ["bool"],
+        "degraded": ["array", "null"]
+      }
+    },
+
+    "timings": {
+      "_comment": "The per-hop breakdown the map replays. `started_epoch` is the replay-once key. A leg that did not happen is null - never 0.",
+      "required": {
+        "started_epoch": ["number", "null"],
+        "server_dispatch_ms": ["number", "null"],
+        "browser_ms": ["number", "null"],
+        "server_finalize_ms": ["number", "null"],
+        "server_ms": ["number", "null"],
+        "launcher_ms": ["number", "null"],
+        "proxy_overhead_ms": ["number", "null"],
+        "complete": ["bool"]
+      }
+    }
+  }
+}

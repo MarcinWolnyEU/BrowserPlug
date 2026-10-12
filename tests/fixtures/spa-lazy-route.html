@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug SPA Lazy Route Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; }
+    #route-status { color: #777; font-style: italic; }
+  </style>
+</head>
+<body>
+  <!--
+    Two-route client-side SPA. View A shows initially. Clicking "Go to B"
+    changes the route via history.pushState — the URL flips to #/b with NO document
+    reload, so document.readyState stays "complete" the whole time. After an
+    artificial LAZY_DELAY_MS "compile" delay, View B is mounted by CREATING a fresh
+    <div data-view="b"> (it is NOT merely unhidden): [data-view=b] does not exist in
+    the DOM at all until the delay elapses. An agent that waits on [data-view=b] is
+    therefore genuinely blocked until the route mounts; a readyState/reload-based
+    settle can never observe this mount because the document never reloads.
+
+    LAZY_DELAY_MS is set well above 1s on purpose: a page_act sequence runs a short
+    (~600ms) post-click settle window BEFORE the wait step's own clock starts, so the
+    delay is sized so the wait step's OWN reported elapsed still clears the caller's
+    ~1100ms "did it really block?" floor with margin.
+
+    DISTINCTIVE_MARKER_SPA_LAZY_ROUTE
+  -->
+  <div id="app">
+    <div data-view="a">
+      <h1>View A</h1>
+      <p>Initial route of the lazy-load SPA (DISTINCTIVE_MARKER_SPA_LAZY_ROUTE).</p>
+      <button type="button" id="go-b">Go to B</button>
+    </div>
+  </div>
+
+  <script>
+    // Artificial lazy-route delay (ms). See the comment above for why it is > 1s.
+    var LAZY_DELAY_MS = 2000;
+
+    document.getElementById('go-b').addEventListener('click', function () {
+      // 1) Client-side route change: the URL flips immediately, with NO reload.
+      history.pushState({}, '', '#/b');
+
+      // 2) Show a placeholder while the route "compiles". This is NOT [data-view=b].
+      var app = document.getElementById('app');
+      app.innerHTML = '<div id="route-status">compiling route B…</div>';
+
+      // 3) After the artificial delay, mount View B by CREATING the element (not
+      //    unhiding one), so [data-view=b] simply does not exist until this fires.
+      setTimeout(function () {
+        var view = document.createElement('div');
+        view.setAttribute('data-view', 'b');
+        var h = document.createElement('h1');
+        h.textContent = 'View B mounted';
+        var p = document.createElement('p');
+        p.textContent = 'Route B finished lazy-loading and its component tree is now in the DOM.';
+        view.appendChild(h);
+        view.appendChild(p);
+        app.replaceChildren(view);
+      }, LAZY_DELAY_MS);
+    });
+  </script>
+</body>
+</html>

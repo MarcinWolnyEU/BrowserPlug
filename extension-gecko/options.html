@@ -1,0 +1,2351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BrowserPlug Extension Options</title>
+    <style>
+        /* ============================================================
+           Palette: Firefox about:preferences (light)
+           ============================================================ */
+        :root {
+            --page-bg: #f9f9fb;
+            --card-bg: #ffffff;
+            --sidebar-bg: #f9f9fb;
+            --text: #15141a;
+            --text-muted: #5b5b66;
+            --border: #d7d7db;
+            --border-strong: #b1b1b9;
+            --accent: #0061e0;
+            --accent-hover: #0250bb;
+            --accent-active: #054096;
+            --accent-soft: #d6e6ff;     /* selected nav pill (periwinkle, matches Firefox) */
+            --accent-text: #0061e0;
+            --input-bg: #ffffff;
+            --input-border: #b1b1b9;
+            --focus-ring: rgba(0, 97, 224, .45);
+            --shadow: 0 1px 4px rgba(0, 0, 0, .06);
+            --shadow-toast: 0 4px 16px rgba(0, 0, 0, .18);
+            --btn-ghost-bg: #f0f0f4;
+            --btn-ghost-hover: #e0e0e6;
+            --btn-ghost-active: #cfcfd8;
+            --ok: #2ac3a2;
+            --ok-bg: #d9f5ee;
+            --ok-text: #005e52;
+            --err: #e22850;
+            --err-bg: #ffe3e8;
+            --err-text: #8f1d34;
+            --warn-bg: #fff4d6;
+            --warn-text: #7a5a00;
+            --pill-neutral-bg: #ededf0;
+            --pill-neutral-text: #5b5b66;
+            --kv-key: #5b5b66;
+            --remote: #7c3aed;          /* remote browsers in the connection map */
+            --browser-accent: #e55b13;  /* Firefox-orange node dot in the map */
+            --ext-accent: #b5279c;      /* the extension node, next to its browser */
+            --route: #d97706;           /* "this client's calls go to THAT browser" */
+            --mono: ui-monospace, "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --page-bg: #1c1b22;
+                --card-bg: #2b2a33;
+                --sidebar-bg: #1c1b22;
+                --text: #fbfbfe;
+                --text-muted: #bfbfc9;
+                --border: #52525e;
+                --border-strong: #6a6a76;
+                --accent: #4dc4ff;
+                --accent-hover: #74d1ff;
+                --accent-active: #a0dfff;
+                --accent-soft: #2b3a52;
+                --accent-text: #80c8ff;
+                --input-bg: #1c1b22;
+                --input-border: #6a6a76;
+                --focus-ring: rgba(128, 200, 255, .5);
+                --shadow: 0 1px 4px rgba(0, 0, 0, .35);
+                --shadow-toast: 0 4px 16px rgba(0, 0, 0, .5);
+                --btn-ghost-bg: #38373f;
+                --btn-ghost-hover: #45444d;
+                --btn-ghost-active: #52525e;
+                --ok: #54ffbd;
+                --ok-bg: #123a33;
+                --ok-text: #7bf5d3;
+                --err: #ff5b7a;
+                --err-bg: #4a1622;
+                --err-text: #ffb3c1;
+                --warn-bg: #4a3d12;
+                --warn-text: #ffe08a;
+                --pill-neutral-bg: #3a3944;
+                --pill-neutral-text: #bfbfc9;
+                --kv-key: #bfbfc9;
+                --remote: #c4a1ff;
+                --browser-accent: #ff9456;
+                --ext-accent: #ff8fe0;
+                --route: #ffb347;
+            }
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body { height: 100%; }
+
+        body {
+            margin: 0;
+            background: var(--page-bg);
+            color: var(--text);
+            font-family: system-ui, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        /* ============================================================
+           Layout shell
+           ============================================================ */
+        .app {
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+            min-height: 100vh;
+            max-width: 1120px;
+            margin: 0 auto;
+        }
+
+        /* ---------- Sidebar ---------- */
+        .sidebar {
+            background: var(--sidebar-bg);
+            padding: 22px 12px 24px;
+            border-right: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            align-self: start;
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 10px 16px;
+            margin-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .brand-logo {
+            flex: 0 0 auto;
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+        }
+
+        .brand-titles { min-width: 0; }
+
+        .brand-name {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: .2px;
+        }
+
+        .brand-version {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .nav {
+            list-style: none;
+            margin: 12px 0 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 9px 12px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            font: inherit;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            transition: background .1s;
+        }
+
+        .nav-item .nav-icon {
+            flex: 0 0 auto;
+            width: 20px;
+            height: 20px;
+            color: var(--text-muted);
+        }
+
+        .nav-item:hover { background: var(--btn-ghost-bg); }
+
+        .nav-item[aria-selected="true"] {
+            background: var(--accent-soft);
+            color: var(--accent-text);
+            font-weight: 600;
+        }
+
+        .nav-item[aria-selected="true"] .nav-icon { color: var(--accent-text); }
+
+        .nav-item:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        /* ---------- Content ---------- */
+        .content {
+            padding: 28px 40px 60px;
+            min-width: 0;
+        }
+
+        .pane[hidden] { display: none; }
+
+        .pane-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 4px 0 22px;
+        }
+
+        .pane-header .pane-icon {
+            width: 26px;
+            height: 26px;
+            color: var(--text);
+        }
+
+        .pane-header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        /* ---------- Cards ---------- */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            padding: 20px 22px;
+            margin-bottom: 22px;
+        }
+
+        .card-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 4px;
+        }
+
+        .card-head .card-icon {
+            width: 18px;
+            height: 18px;
+            color: var(--text);
+        }
+
+        .card-head h2 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .card-desc {
+            margin: 0 0 16px;
+            color: var(--text-muted);
+            font-size: 13.5px;
+        }
+
+        .card-desc:last-child { margin-bottom: 0; }
+
+        .card-desc code {
+            font-family: var(--mono);
+            background: var(--btn-ghost-bg);
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: var(--text);
+        }
+
+        /* ---------- Form primitives ---------- */
+        .field { margin-bottom: 16px; }
+        .field:last-child { margin-bottom: 0; }
+
+        /* .field-label is for a group of controls, where a <label for> would
+           forward the click to whichever one it named. */
+        .field > label,
+        .field > .field-label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            font-size: 13.5px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        input[type="password"],
+        select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--input-border);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text);
+            font: inherit;
+            font-size: 14px;
+        }
+
+        input[readonly] {
+            background: var(--btn-ghost-bg);
+            color: var(--text-muted);
+        }
+
+        /* Multi-line text field (the custom censor patterns). Same skin as the inputs. */
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 110px;
+            padding: 8px 10px;
+            border: 1px solid var(--input-border);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 13px;
+            line-height: 1.45;
+            resize: vertical;
+        }
+        textarea:hover { border-color: var(--border-strong); }
+        textarea:focus-visible {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        /* Hover feedback (grafted from candidate B) */
+        input[type="text"]:hover,
+        input[type="number"]:hover,
+        input[type="password"]:hover,
+        select:hover { border-color: var(--border-strong); }
+
+        input:focus-visible,
+        select:focus-visible {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        /* One row: hostname, port, the URL they derive, and the live link state.
+           The two text inputs share the slack; the port is five digits and the
+           status column is only as wide as its own text. */
+        .conn-grid {
+            display: grid;
+            /* The last column is `auto` so "Server HTTP Port" fits on one line; at a fixed
+               100px, like the WebSocket port beside it, the label wraps. */
+            grid-template-columns: minmax(0, 1fr) 100px minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: start;
+            margin-bottom: 16px;
+        }
+
+        .conn-grid .field { margin-bottom: 0; }
+
+        /* Several short number fields on one line. */
+        .field-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+        .field-row .field { margin-bottom: 0; }
+        .field-row[hidden] { display: none; }
+        .field-row.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        @media (max-width: 640px) {
+            .field-row.two { grid-template-columns: minmax(0, 1fr); }
+        }
+        .censor-test-output {
+            margin: 6px 0 0;
+            padding: 8px 10px;
+            min-height: 60px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 13px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        @media (max-width: 640px) {
+            .field-row { grid-template-columns: minmax(0, 1fr); }
+        }
+
+        /* Four columns need a wide card; below that the two text inputs get
+           squeezed to nothing, so fold to two rows of two. */
+        @media (max-width: 1100px) {
+            .conn-grid { grid-template-columns: minmax(0, 1fr) 100px; row-gap: 16px; }
+        }
+
+        /* A port is five digits; don't stretch its input across the whole card. */
+        .field-narrow input { max-width: 170px; }
+
+        .help-text {
+            font-size: 12.5px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        .help-text code {
+            font-family: var(--mono);
+            background: var(--btn-ghost-bg);
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+
+        .field > label .muted {
+            font-weight: 400;
+            color: var(--text-muted);
+        }
+
+        .card-desc + .field { margin-top: 0; }
+
+        /* ---------- Buttons ---------- */
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+
+        button.btn {
+            font: inherit;
+            font-weight: 600;
+            font-size: 14px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: background .1s, box-shadow .1s;
+        }
+
+        button.btn:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        /* A disabled button must LOOK disabled: an in-flight Set & Restart is latched
+           for the seconds the server takes to come back, and a button that still reads
+           as clickable invites the second click the latch exists to refuse. */
+        button.btn:disabled,
+        button.btn:disabled:hover,
+        button.btn:disabled:active {
+            background: var(--btn-ghost-bg);
+            color: var(--text-muted);
+            border-color: var(--border);
+            cursor: default;
+            filter: none;
+            opacity: .65;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+        @media (prefers-color-scheme: dark) {
+            .btn-primary { color: #15141a; }
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-primary:active { background: var(--accent-active); }
+
+        .btn-ghost {
+            background: var(--btn-ghost-bg);
+            color: var(--text);
+        }
+        .btn-ghost:hover { background: var(--btn-ghost-hover); }
+        .btn-ghost:active { background: var(--btn-ghost-active); }
+
+        .btn-danger { background: var(--err); color: #fff; }
+        @media (prefers-color-scheme: dark) {
+            .btn-danger { color: #15141a; }
+        }
+        .btn-danger:hover { filter: brightness(1.06); }
+        .btn-danger:active { filter: brightness(.94); }
+
+        .btn-sm { font-size: 12px; padding: 4px 10px; font-weight: 500; }
+
+        /* ---------- Token field + remote setup ---------- */
+        /* Input + its buttons on one line: Show/Copy sit with the field they act on. */
+        .token-row, .bind-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .token-row input { flex: 1 1 260px; }
+        .bind-row { margin-top: 8px; }
+        .bind-row input {
+            flex: 0 1 180px;
+            font-family: var(--mono);
+            font-size: 13px;
+        }
+
+        /* One-line verdict under a control: token hint, bind state, connection test. */
+        .field-note {
+            margin-top: 6px;
+            font-size: 13px;
+            display: flex;
+            align-items: baseline;
+            gap: 7px;
+        }
+        .field-note::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            flex: none;
+            transform: translateY(-1px);
+        }
+        .field-note.ok::before { background: var(--ok); }
+        .field-note.warn::before { background: #f0a500; }
+        .field-note.err::before { background: var(--err); }
+        .field-note.busy::before { background: var(--accent); }
+        .field-note.ok { color: var(--ok-text); }
+        .field-note.err { color: var(--err-text); }
+        .field-note.warn, .field-note.busy { color: var(--text-muted); }
+        /* display:flex above would defeat the `hidden` attribute (author rules beat the
+           UA [hidden] rule). Without this, an unused note renders an orphan dot. It
+           went unseen while these notes sat inside a collapsed <details>; the network
+           panels are always expanded, so it must be explicit. */
+        .field-note[hidden] { display: none; }
+        @media (prefers-color-scheme: dark) {
+            .field-note.ok { color: var(--ok); }
+        }
+
+        /* The reachability diagnosis is several findings plus a command to copy, so it
+           stacks. It used to borrow .field-note, which is display:flex for its dot-plus-
+           one-line shape; the findings came out as side-by-side columns about 12
+           characters wide and the PowerShell command was clipped mid-word. */
+        .diagnosis {
+            display: block;
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+        .diagnosis > * { margin-top: 7px; }
+        .diagnosis > *:first-child { margin-top: 0; }
+        .diagnosis .ok-line { color: var(--ok-text); }
+        .diagnosis .err-line { color: var(--err-text); }
+        /* A command is read to be retyped or copied, so wrap it rather than hiding the
+           tail behind a scrollbar; `anywhere` because a long rule name has no spaces. */
+        .diagnosis .code-block { overflow-wrap: anywhere; }
+        .diagnosis[hidden] { display: none; }
+        @media (prefers-color-scheme: dark) {
+            .diagnosis .ok-line { color: var(--ok); }
+        }
+
+        .remote-setup {
+            margin-top: 18px;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+        }
+        .remote-setup-heading {
+            font-weight: 600;
+            font-size: 14px;
+            margin: 0 0 6px;
+        }
+        /* Column labels only: a bare `.remote-setup h3` would also catch (and shrink)
+           the .remote-setup-heading above, which is an h3 in the same subtree. */
+        .net-col h3 {
+            font-size: 13px;
+            margin: 14px 0 6px;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--text-muted);
+        }
+        /* Generic muted span/code (the scoped .field/.health-grid variants add sizing). */
+        .muted { color: var(--text-muted); }
+
+        /* Local / LAN / WAN panels under the picker */
+        .net-mode-status { margin: 12px 0 4px; }
+        .net-panel { margin-top: 12px; }
+        .net-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 20px;
+        }
+        .adv-disclosure { margin-top: 10px; }
+        .adv-disclosure > summary {
+            cursor: pointer;
+            font-size: 12.5px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        .lan-addr {
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+            padding: 2px 0;
+        }
+        .lan-addr .lan-if {
+            color: var(--text-muted);
+            font-size: 12px;
+            font-family: inherit;
+            flex: none;
+        }
+        .lan-addr.recommended code { font-weight: 700; color: var(--accent-text); }
+        .net-reach { margin-bottom: 8px; }
+        .steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+        .steps li { margin-bottom: 6px; }
+        .code-block {
+            margin: 6px 0;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            font-family: var(--mono);
+            font-size: 12px;
+            overflow-x: auto;
+        }
+        .code-block code { display: block; background: none; padding: 0; }
+
+        /* ---------- Confirmation modal (native <dialog>) ---------- */
+        dialog.modal {
+            border: none;
+            padding: 0;
+            background: transparent;
+            max-width: 440px;
+            width: calc(100% - 32px);
+            color: var(--text);
+        }
+        dialog.modal::backdrop {
+            background: rgba(0, 0, 0, .45);
+        }
+        .modal-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 22px 22px 18px;
+            box-shadow: var(--shadow-toast);
+        }
+        .modal-title { margin: 0 0 10px; font-size: 17px; }
+        .modal-body { margin: 0 0 12px; font-size: 13.5px; color: var(--text-muted); }
+        .modal-target { margin: 0 0 18px; font-size: 12.5px; color: var(--text-muted); }
+        .modal-target code {
+            font-family: var(--mono);
+            background: var(--btn-ghost-bg);
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: var(--text);
+            word-break: break-all;
+        }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+        /* ---------- Status toast (floats above every pane) ----------
+           Kept in the DOM (not display:none) so its aria-live region reliably
+           announces messages; hidden via opacity when idle. */
+        .status {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 50;
+            max-width: 360px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 13.5px;
+            box-shadow: var(--shadow-toast);
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(8px);
+            transition: opacity .15s ease, transform .15s ease;
+        }
+
+        .status.visible {
+            opacity: 1;
+            transform: none;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .status { transition: none; }
+        }
+
+        .status.success {
+            background: var(--ok-bg);
+            color: var(--ok-text);
+            border: 1px solid var(--ok);
+        }
+
+        .status.error {
+            background: var(--err-bg);
+            color: var(--err-text);
+            border: 1px solid var(--err);
+        }
+
+        /* ---------- Connection status ---------- */
+        /* Sits in the last .conn-grid cell, so it has to line up with the inputs
+           beside it: same height as one, and no wrapping that would make the row
+           taller than the fields. */
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 38px;
+            white-space: nowrap;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: var(--pill-neutral-text);
+            flex: 0 0 auto;
+        }
+
+        /* The second dot opens a new pair on the same row, so it needs more space before
+           it than the 10px separating a dot from its own word. */
+        .status-indicator.second { margin-left: 8px; }
+
+        .status-indicator.connected { background-color: var(--ok); }
+        .status-indicator.disconnected { background-color: var(--err); }
+        .status-indicator.degraded { background-color: #f0ad4e; }
+
+        #connectionText { font-weight: 600; }
+
+        .connection-status button { flex: 0 0 auto; }
+
+        /* A phone is narrower than "Disconnected + Unreachable + a button", so the
+           button used to be pushed off the row's end. Wrap it onto its own line
+           under the two dots rather than shrinking the labels that carry the
+           actual state. */
+        body[data-platform="android"] .connection-status { flex-wrap: wrap; }
+        body[data-platform="android"] .connection-status button {
+            flex: 0 0 100%;
+            margin-top: 2px;
+        }
+
+        /* ============================================================
+           UI surface selector (card picker)
+           ============================================================ */
+        .surface-options {
+            display: flex;
+            gap: 12px;
+            flex-wrap: nowrap;
+            margin-top: 8px;
+        }
+
+        .surface-card {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 8px;
+            border: 1px solid var(--border-strong);
+            border-radius: 8px;
+            background: var(--card-bg);
+            cursor: pointer;
+            font-weight: normal;
+            text-align: center;
+            transition: border-color .12s, box-shadow .12s, background .12s;
+        }
+
+        .surface-card:hover { background: var(--accent-soft); }
+
+        .surface-card.selected {
+            border: 2px solid var(--accent);
+            padding: 13px 7px; /* keep size stable despite the thicker border */
+            box-shadow: 0 0 0 1px var(--accent) inset;
+        }
+
+        .surface-card input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .surface-card:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        .surface-mock {
+            width: 92px;
+            max-width: 100%;
+            height: auto;
+        }
+
+        /* Firefox for Android offers exactly ONE surface, so the picker shows exactly one
+           card there and the desktop set disappears. Driven by a data-platform stamped on
+           <body> at load (runtime.getPlatformInfo), never by a build flag: options.html is
+           a shared file and Chrome would inherit anything baked in. */
+        body[data-platform="android"] .desktop-only { display: none; }
+        body:not([data-platform="android"]) .mobile-only { display: none; }
+
+        .surface-name {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .surface-card.selected .surface-name {
+            color: var(--accent-text);
+            font-weight: bold;
+        }
+
+        /* ---------- Checkbox ---------- */
+        .checkbox-label {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 13.5px;
+            cursor: pointer;
+        }
+
+        .checkbox-label input {
+            width: auto;
+            margin: 2px 0 0;
+            accent-color: var(--accent);
+            flex: 0 0 auto;
+        }
+
+        /* ============================================================
+           Health pane
+           ============================================================ */
+        .health-controls {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .health-controls .btn { margin-bottom: 0; }
+
+        .health-url {
+            margin: 12px 0 4px;
+            font-size: 12.5px;
+            color: var(--text-muted);
+        }
+
+        .health-url code {
+            font-family: var(--mono);
+            background: var(--btn-ghost-bg);
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: var(--text);
+        }
+
+        .health-output {
+            margin-top: 16px;
+        }
+
+        /* Placeholder / loading / error states rendered by options.js.
+           These utility classes are ready for it to apply. */
+        .health-placeholder,
+        .health-loading,
+        .health-error {
+            padding: 18px;
+            border: 1px dashed var(--border-strong);
+            border-radius: 8px;
+            color: var(--text-muted);
+            font-size: 13.5px;
+            text-align: center;
+        }
+
+        .health-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .health-error {
+            border-style: solid;
+            border-color: var(--err);
+            background: var(--err-bg);
+            color: var(--err-text);
+            text-align: left;
+        }
+
+        .health-error code {
+            font-family: var(--mono);
+            word-break: break-all;
+        }
+
+        .health-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-strong);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+            flex: 0 0 auto;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (prefers-reduced-motion: reduce) {
+            .health-spinner { animation: none; }
+        }
+
+        /* Status pill (rendered by options.js at top of health output) */
+        .health-status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 13px;
+            background: var(--pill-neutral-bg);
+            color: var(--pill-neutral-text);
+        }
+
+        .health-status-pill.ok { background: var(--ok-bg); color: var(--ok-text); }
+        .health-status-pill.warn { background: var(--warn-bg); color: var(--warn-text); }
+        .health-status-pill.bad { background: var(--err-bg); color: var(--err-text); }
+
+        .health-status-pill .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            flex: 0 0 auto;
+        }
+
+        /* Key/value grid (rendered by options.js) */
+        .health-grid {
+            display: grid;
+            grid-template-columns: max-content minmax(0, 1fr);
+            gap: 8px 18px;
+            margin-top: 16px;
+            font-size: 13.5px;
+        }
+
+        .health-grid dt {
+            color: var(--kv-key);
+            font-weight: 600;
+        }
+
+        .health-grid dd {
+            margin: 0;
+            word-break: break-word;
+            font-family: var(--mono);
+            font-size: 12.5px;
+        }
+
+        .health-grid dd .muted { color: var(--text-muted); font-family: inherit; }
+        .health-grid dd .yes { color: var(--ok-text); font-weight: 600; }
+        .health-grid dd .no { color: var(--err-text); font-weight: 600; }
+
+        /* Raw JSON details (rendered by options.js) */
+        .health-raw {
+            margin-top: 16px;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+        }
+
+        .health-raw > summary {
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13.5px;
+            color: var(--accent-text);
+        }
+
+        .health-raw pre {
+            margin: 10px 0 0;
+            padding: 12px;
+            background: var(--page-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: var(--mono);
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text);
+        }
+
+        /* ============================================================
+           Connection map (Health pane)
+           ============================================================ */
+        /* "live" badge in the card head; .paused while the tab is hidden/inactive */
+        .map-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            background: var(--ok-bg);
+            color: var(--ok-text);
+        }
+        .map-live .map-live-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--ok);
+            animation: map-live-blink 2.2s ease-in-out infinite;
+        }
+        .map-live.paused {
+            background: var(--pill-neutral-bg);
+            color: var(--pill-neutral-text);
+        }
+        .map-live.paused .map-live-dot {
+            background: var(--pill-neutral-text);
+            animation: none;
+        }
+        @keyframes map-live-blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .25; }
+        }
+
+        .conn-map {
+            position: relative;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--page-bg);
+            overflow: hidden;
+            /* The floor lives on the SVG, not here. This box hugs the SVG, and the SVG's
+               height is its width times the viewBox ratio (MAP_W is 976), so a 150px
+               floor HERE is one the child can only meet on a 976px-wide card: measured
+               at 714px, the box stood at 150 while the drawing was 110, leaving 40px of
+               dead space inside the border. It closed as rows were added and reopened
+               when they went away, which is why it looked intermittent. */
+        }
+        .conn-map svg {
+            display: block;
+            width: 100%;
+            height: auto;
+            /* Reserve the same space the box used to, in the one place that can honour
+               it. Below this the drawing letterboxes (preserveAspectRatio centres it)
+               instead of the border pulling away from it. */
+            min-height: 150px;
+            cursor: grab;
+            /* The map owns the wheel (it zooms) and drags (they pan); the page must
+               not scroll or select text underneath while either is happening. */
+            touch-action: none;
+            user-select: none;
+        }
+        .conn-map.panning svg { cursor: grabbing; }
+        /* Server went away mid-session: keep the last picture, ghosted. */
+        .conn-map.stale svg { opacity: .35; }
+        .conn-map svg { transition: opacity .3s ease; }
+
+        /* ---- zoom controls (top-right of the map box) ---- */
+        .conn-map-zoom {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            display: flex;
+            align-items: stretch;
+            gap: 1px;
+            padding: 1px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            background: var(--card-bg);
+            box-shadow: var(--shadow);
+            z-index: 2;
+        }
+        .conn-map-zoom .map-zoom-btn {
+            min-width: 26px;
+            padding: 2px 6px;
+            border: 0;
+            border-radius: 5px;
+            background: transparent;
+            color: var(--text);
+            font: 600 13px system-ui, "Segoe UI", sans-serif;
+            line-height: 1.5;
+            cursor: pointer;
+        }
+        .conn-map-zoom .map-zoom-btn:hover { background: var(--btn-ghost-hover); }
+        .conn-map-zoom .map-zoom-btn:active { background: var(--btn-ghost-active); }
+        .conn-map-zoom .map-zoom-btn:focus-visible {
+            outline: 2px solid var(--focus-ring);
+            outline-offset: 1px;
+        }
+        /* The middle button doubles as the level readout ("125%") and the reset. */
+        .conn-map-zoom .map-zoom-level {
+            min-width: 46px;
+            font: 600 11px var(--mono);
+            color: var(--text-muted);
+        }
+        .conn-map.zoomed .map-zoom-level { color: var(--accent-text); }
+
+        .conn-map-msg {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .conn-map-msg[hidden] { display: none; }
+
+        /* ---- nodes (SVG <g class="mn">) ---- */
+        .mn { transition: opacity .35s ease; }
+        .mn.enter, .mn.dying { opacity: 0; }
+        .mn .mn-box {
+            fill: var(--card-bg);
+            stroke: var(--border-strong);
+            stroke-width: 1.25;
+        }
+        .mn .mn-title {
+            font: 600 12.5px system-ui, "Segoe UI", sans-serif;
+            fill: var(--text);
+        }
+        .mn .mn-sub {
+            font: 400 10.5px var(--mono);
+            fill: var(--text-muted);
+        }
+        .mn .mn-dot { fill: var(--pill-neutral-text); }
+        .mn.k-server .mn-box { stroke: var(--accent); stroke-width: 1.5; }
+        .mn.k-server .mn-dot { fill: var(--accent); }
+        .mn.k-client .mn-dot { fill: var(--ok); }
+        .mn.k-browser .mn-dot { fill: var(--browser-accent); }
+        .mn.k-ext .mn-dot { fill: var(--ext-accent); }
+        .mn.k-ext .mn-box { stroke: var(--ext-accent); }
+        .mn.k-launcher .mn-dot { fill: var(--pill-neutral-text); }
+        .mn.k-launcher .mn-title,
+        .mn.k-ext .mn-title { font-size: 11px; }
+
+        /* Port stubs: the attachment points edges glue to, a socket on the box
+           border plus a tiny label (out-labels above the line, in-labels below). */
+        .mn .mn-port-dot {
+            fill: var(--card-bg);
+            stroke: var(--border-strong);
+            stroke-width: 1.25;
+        }
+        .mn.k-server .mn-port-dot { stroke: var(--accent); }
+        .mn.remote .mn-port-dot { stroke: var(--remote); }
+        .mn .mn-port {
+            font: 600 7.5px var(--mono);
+            letter-spacing: .03em;
+            fill: var(--text-muted);
+        }
+        /* Remote browsers: violet, dashed, unmistakably not this machine. */
+        .mn.remote .mn-box { stroke: var(--remote); stroke-dasharray: 5 3; }
+        .mn.remote .mn-dot { fill: var(--remote); }
+        .mn .mn-pill { fill: var(--remote); }
+        .mn .mn-pill-text {
+            font: 700 7.5px system-ui, "Segoe UI", sans-serif;
+            letter-spacing: .08em;
+            fill: #fff;
+        }
+        @media (prefers-color-scheme: dark) {
+            .mn .mn-pill-text { fill: #15141a; }
+        }
+        /* The browser this options page lives in. */
+        .mn.self .mn-box { fill: var(--accent-soft); }
+        .mn:focus-visible { outline: none; }
+        .mn:focus-visible .mn-box { stroke: var(--accent); stroke-width: 2.5; }
+
+        /* Activity pulse: an expanding, fading ring around the node box. */
+        .mn .mn-ring {
+            fill: none;
+            stroke: var(--accent);
+            opacity: 0;
+            pointer-events: none;
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+        .mn.k-browser .mn-ring { stroke: var(--browser-accent); }
+        .mn.k-ext .mn-ring { stroke: var(--ext-accent); }
+        .mn.k-client .mn-ring { stroke: var(--ok); }
+        .mn.remote .mn-ring { stroke: var(--remote); }
+        .mn.pulse .mn-ring { animation: map-ring .8s ease-out; }
+        @keyframes map-ring {
+            0% { opacity: .9; stroke-width: 1; transform: scale(1); }
+            100% { opacity: 0; stroke-width: 7; transform: scale(1.06); }
+        }
+
+        /* ---- edges (SVG <g class="me">) ---- */
+        .me { transition: opacity .35s ease; }
+        .me.enter, .me.dying { opacity: 0; }
+        .me .me-line {
+            fill: none;
+            stroke: var(--border-strong);
+            stroke-width: 1.5;
+        }
+        .me.remote .me-line { stroke: var(--remote); stroke-dasharray: 7 4; }
+        /* Recent traffic: dots flowing along the line, in the request direction. */
+        .me .me-flow {
+            fill: none;
+            stroke: var(--accent);
+            stroke-width: 2.25;
+            stroke-linecap: round;
+            stroke-dasharray: 3 11;
+            opacity: 0;
+            transition: opacity .4s ease;
+            animation: map-flow 1s linear infinite;
+        }
+        .me.remote .me-flow { stroke: var(--remote); }
+        .me.active .me-flow { opacity: .95; }
+        @keyframes map-flow {
+            to { stroke-dashoffset: -14; }
+        }
+        /* Routing line: not a wire, an assignment — which browser a client's calls land
+           in. Orange, dashed, arrow-headed, and it never carries the traffic flow.
+           It is also the one edge that does not lie on the board: it hangs off the
+           bottom of two boxes, and swings as the view pans. */
+        .me.route .me-line {
+            stroke: var(--route);
+            stroke-width: 1.75;
+            stroke-dasharray: 5 4;
+        }
+        .me.route .me-flow { display: none; }
+        .map-route-arrow { fill: var(--route); }
+        /* Fat invisible stroke so the thin line is hoverable (native <title> tooltip). */
+        .me .me-hit {
+            fill: none;
+            stroke: transparent;
+            stroke-width: 14;
+        }
+
+        /* Replay worms: one-shot pulses tracing a completed call; request out
+           (accent), response back (green). pathLength=100 on the element makes
+           these keyframes fit every hop. Dash 16 + gap 100 > path, so exactly
+           one worm is visible as the offset sweeps through. */
+        .me .me-worm {
+            fill: none;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-dasharray: 16 100;
+            animation-timing-function: linear;
+            animation-fill-mode: forwards;
+        }
+        .me .me-worm.fwd {
+            stroke: var(--accent);
+            stroke-dashoffset: 16;
+            animation-name: map-worm-fwd;
+        }
+        .me .me-worm.rev {
+            stroke: var(--ok);
+            stroke-dashoffset: -100;
+            animation-name: map-worm-rev;
+        }
+        @keyframes map-worm-fwd { to { stroke-dashoffset: -100; } }
+        @keyframes map-worm-rev { to { stroke-dashoffset: 16; } }
+
+        /* "<N> ms" timers popping out of each hop after a replay. The outer <g>
+           carries the position (transform attribute); the text carries the pop
+           animation, so the two transforms can't fight. */
+        .ms-pop { pointer-events: none; }
+        .ms-pop .ms-pop-text {
+            font: 700 11px var(--mono);
+            fill: var(--accent);
+            paint-order: stroke;
+            stroke: var(--card-bg);
+            stroke-width: 3px;
+            opacity: 0;
+            animation: map-ms-pop 2.4s ease-out forwards;
+        }
+        @keyframes map-ms-pop {
+            0%   { opacity: 0; transform: translateY(6px) scale(.7); }
+            12%  { opacity: 1; transform: translateY(0) scale(1.15); }
+            24%  { transform: translateY(-1px) scale(1); }
+            75%  { opacity: 1; transform: translateY(-9px) scale(1); }
+            100% { opacity: 0; transform: translateY(-15px) scale(1); }
+        }
+
+        /* ---- legend under the map ---- */
+        .conn-map-legend {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .conn-map-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+        .conn-map-legend .lg-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+        .lg-dot.lg-server { background: var(--accent); }
+        .lg-dot.lg-client { background: var(--ok); }
+        .lg-dot.lg-browser { background: var(--browser-accent); }
+        .lg-dot.lg-ext { background: var(--ext-accent); }
+        .lg-dot.lg-launcher { background: var(--pill-neutral-text); }
+        .conn-map-legend .lg-line {
+            width: 22px;
+            border-top: 2px dashed var(--remote);
+            flex: none;
+        }
+        .conn-map-legend .lg-line.lg-route { border-top-color: var(--route); }
+        .conn-map-legend .lg-src { margin-left: auto; font-size: 11.5px; }
+
+        /* ---- rich tooltip (one floating div, follows the pointer) ---- */
+        .conn-map-tip {
+            position: fixed;
+            z-index: 60;
+            max-width: 380px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-strong);
+            border-radius: 8px;
+            background: var(--card-bg);
+            box-shadow: var(--shadow-toast);
+            font-size: 12.5px;
+            line-height: 1.45;
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity .12s ease;
+        }
+        .conn-map-tip.visible { opacity: 1; visibility: visible; }
+        .conn-map-tip .tip-title {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 5px;
+            font-weight: 600;
+            word-break: break-all;
+        }
+        .conn-map-tip .tip-kind {
+            flex: none;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .conn-map-tip .tip-kind.remote { color: var(--remote); }
+        .conn-map-tip .tip-row { display: flex; gap: 8px; }
+        .conn-map-tip .tip-k { flex: 0 0 84px; color: var(--kv-key); }
+        .conn-map-tip .tip-v {
+            font-family: var(--mono);
+            font-size: 11.5px;
+            word-break: break-all;
+        }
+        /* One line per active tab, under the tab counts: [id] title (last: hh:mm:ss). */
+        .conn-map-tip .tip-tab {
+            margin-left: 92px;
+            font-family: var(--mono);
+            font-size: 11.5px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .map-live .map-live-dot { animation: none; }
+            .mn, .me, .conn-map svg, .conn-map-tip { transition: none; }
+            .me .me-flow { animation: none; opacity: 0 !important; }
+            .mn.pulse .mn-ring { animation: none; }
+            /* Worms are never spawned under reduced motion (JS checks), but the
+               timers still appear, statically, cleaned up by the same timer. */
+            .ms-pop .ms-pop-text { animation: none; opacity: 1; }
+        }
+
+        /* ============================================================
+           Responsive
+           ============================================================ */
+        @media (max-width: 720px) {
+            .app { grid-template-columns: 1fr; }
+
+            .sidebar {
+                position: static;
+                height: auto;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .nav {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+
+            .nav-item { width: auto; }
+
+            .content { padding: 22px 18px 48px; }
+
+            .conn-grid { grid-template-columns: 1fr; }
+            .net-grid { grid-template-columns: 1fr; }
+
+            .surface-options { flex-wrap: wrap; }
+            .surface-card { flex: 1 1 40%; }
+
+            .health-grid { grid-template-columns: 1fr; gap: 2px 0; }
+            .health-grid dt { margin-top: 8px; }
+            .health-grid dt:first-child { margin-top: 0; }
+
+            .status { left: 16px; right: 16px; bottom: 16px; max-width: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- ============================ Sidebar ============================ -->
+        <aside class="sidebar">
+            <div class="brand">
+                <picture>
+                    <source media="(prefers-color-scheme: dark)" srcset="icons/app/logo-dark.png">
+                    <img class="brand-logo" src="icons/app/logo-light.png" alt="" aria-hidden="true">
+                </picture>
+                <div class="brand-titles">
+                    <div class="brand-name">BrowserPlug</div>
+                    <div class="brand-version">Version <span id="extVersion">…</span></div>
+                </div>
+            </div>
+
+            <ul class="nav" role="tablist" aria-label="Settings sections">
+                <li role="presentation">
+                    <button class="nav-item" data-tab="general" role="tab" id="tab-general"
+                            aria-selected="true" aria-controls="pane-general">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                        General
+                    </button>
+                </li>
+                <li role="presentation">
+                    <button class="nav-item" data-tab="advanced" role="tab" id="tab-advanced"
+                            aria-selected="false" aria-controls="pane-advanced" tabindex="-1">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+                            <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+                            <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+                            <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+                        </svg>
+                        Advanced
+                    </button>
+                </li>
+                <li role="presentation">
+                    <button class="nav-item" data-tab="health" role="tab" id="tab-health"
+                            aria-selected="false" aria-controls="pane-health" tabindex="-1">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        Health
+                    </button>
+                </li>
+            </ul>
+        </aside>
+
+        <!-- ============================ Content ============================ -->
+        <main class="content">
+            <!-- ---------------------- General ---------------------- -->
+            <section class="pane" id="pane-general" role="tabpanel" aria-labelledby="tab-general" tabindex="0">
+                <header class="pane-header">
+                    <svg class="pane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    <h1>General</h1>
+                </header>
+
+                <!-- Server connection -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/>
+                            <line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/>
+                        </svg>
+                        <h2>Server connection</h2>
+                    </div>
+                    <form id="optionsForm">
+                        <div class="conn-grid">
+                            <div class="field">
+                                <label for="hostname">Hostname</label>
+                                <input type="text" id="hostname" value="localhost" placeholder="localhost" required>
+                            </div>
+                            <div class="field">
+                                <label for="port">WebSocket Port</label>
+                                <input type="number" id="port" value="8772" placeholder="8772" min="1" max="65535" required>
+                            </div>
+                            <div class="field">
+                                <label for="wsUrl">WebSocket URL preview</label>
+                                <input type="text" id="wsUrl" readonly>
+                            </div>
+                            <!-- Both ports sit in this row because both are things you
+                                 TYPE; the connection state they produce is read, not
+                                 edited, and lives below. -->
+                            <div class="field">
+                                <label for="mcpPort">Server HTTP Port</label>
+                                <input type="number" id="mcpPort" value="2830" min="1" max="65535">
+                            </div>
+                        </div>
+                        <!-- The live link, as TWO independent facts: the WebSocket carries
+                             every command, the HTTP port serves this page's own data, and
+                             either can be down while the other is up (a firewall rule
+                             covering one port and not the other does exactly that). One
+                             row, one button, both re-checked together.
+
+                             A group, not a <label for="refreshStatus">: that would make
+                             clicking the word "Connection" press the button. -->
+                        <div class="field" role="group" aria-labelledby="connectionLabel">
+                            <span class="field-label" id="connectionLabel">Connection</span>
+                            <div class="connection-status">
+                                <div id="connectionIndicator" class="status-indicator disconnected"
+                                     title="WebSocket"></div>
+                                <span id="connectionText">Disconnected</span>
+                                <div id="httpIndicator" class="status-indicator second disconnected"
+                                     title="Server HTTP port"></div>
+                                <span id="httpText">Unreachable</span>
+                                <button type="button" id="refreshStatus" class="btn btn-ghost btn-sm">Refresh</button>
+                            </div>
+                            <!-- Pressing the button dials what was SAVED, while the dot beside it
+                                 probes what is TYPED. Edit the host and press Reconnect without
+                                 saving and the two disagree with no way to tell why, which is
+                                 exactly how a phone ends up "Disconnected" next to "Reachable". -->
+                            <div class="field-note warn" id="connDirtyNote" hidden></div>
+                            <div class="help-text" id="mcpPortLive"></div>
+                        </div>
+                        <div class="field">
+                            <label for="connectionToken">Connection token</label>
+                            <div class="token-row">
+                                <input type="password" id="connectionToken" autocomplete="off" spellcheck="false"
+                                       placeholder="Fetched automatically from a server on this machine">
+                                <button type="button" class="btn btn-ghost btn-sm" id="tokenShow">Show</button>
+                                <button type="button" class="btn btn-ghost btn-sm" id="tokenCopy">Copy</button>
+                            </div>
+                            <div class="field-note" id="tokenHint" hidden></div>
+                            <div class="help-text">
+                                Leave blank for a server on this machine. For another machine, paste a
+                                device token: <strong>Copy</strong> in Options there, or run
+                                <code>python gen_ws_token.py --device</code>.
+                            </div>
+                        </div>
+
+                        <div class="btn-row">
+                            <button type="submit" class="btn btn-primary">Save Settings</button>
+                        </div>
+                    </form>
+
+                    <!-- Everything needed to point a browser on ANOTHER machine at this
+                         server. The two halves are done in DIFFERENT browsers: the first on
+                         one sitting next to the server (it can drive the server's HTTP API
+                         and it holds the token), the second on the remote browser itself.
+                         Both are live: filled in and acted on through the server's /health
+                         and /ws-bind, and a WebSocket probe from this very page. -->
+                    <!-- desktop-only: every word of this configures the machine RUNNING the
+                         server, and a phone is never that machine. The Hostname / Port /
+                         Connection token fields it does need are above, outside this block. -->
+                    <div class="remote-setup desktop-only" id="remoteSetup">
+                        <h3 class="remote-setup-heading">Configure local server for incoming connections</h3>
+                        <p class="card-desc">
+                            Where do the browsers that use this server live? Nothing changes until you
+                            press Set.
+                        </p>
+
+                        <div class="surface-options" id="netModeOptions" role="radiogroup" aria-label="Server network mode">
+                            <label class="surface-card" data-mode="local">
+                                <input type="radio" name="netMode" value="local">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="31" y="13" width="30" height="22" rx="3" fill="#e7efff" stroke="#6f97e0"/>
+                                    <line x1="36" y1="20" x2="56" y2="20" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="36" y1="26" x2="52" y2="26" stroke="#c3d3f2" stroke-width="2"/>
+                                    <rect x="43.5" y="35" width="5" height="5" fill="#c4c4c4"/>
+                                    <rect x="37" y="40" width="18" height="3" rx="1.5" fill="#c4c4c4"/>
+                                </svg>
+                                <span class="surface-name">Local</span>
+                            </label>
+                            <label class="surface-card" data-mode="lan">
+                                <input type="radio" name="netMode" value="lan">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="8" y="17" width="26" height="19" rx="3" fill="#e7efff" stroke="#6f97e0"/>
+                                    <line x1="12" y1="23" x2="30" y2="23" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="12" y1="28" x2="26" y2="28" stroke="#c3d3f2" stroke-width="2"/>
+                                    <rect x="58" y="17" width="26" height="19" rx="3" fill="#fff" stroke="#c4c4c4"/>
+                                    <line x1="62" y1="23" x2="80" y2="23" stroke="#c4c4c4" stroke-width="2"/>
+                                    <line x1="62" y1="28" x2="76" y2="28" stroke="#f0f0f0" stroke-width="2"/>
+                                    <line x1="34" y1="26.5" x2="58" y2="26.5" stroke="#9bb6e8" stroke-width="2"/>
+                                    <!-- RJ-45 plug, seen head-on: body + latch tab + 8 contacts -->
+                                    <path d="M40 19.5h12a2 2 0 0 1 2 2v9h-5v3h-6v-3h-5v-9a2 2 0 0 1 2-2z" fill="#d6e4ff" stroke="#6f97e0"/>
+                                    <g stroke="#6f97e0" stroke-width="0.7">
+                                        <line x1="40.4" y1="21.4" x2="40.4" y2="25.8"/>
+                                        <line x1="42" y1="21.4" x2="42" y2="25.8"/>
+                                        <line x1="43.6" y1="21.4" x2="43.6" y2="25.8"/>
+                                        <line x1="45.2" y1="21.4" x2="45.2" y2="25.8"/>
+                                        <line x1="46.8" y1="21.4" x2="46.8" y2="25.8"/>
+                                        <line x1="48.4" y1="21.4" x2="48.4" y2="25.8"/>
+                                        <line x1="50" y1="21.4" x2="50" y2="25.8"/>
+                                        <line x1="51.6" y1="21.4" x2="51.6" y2="25.8"/>
+                                    </g>
+                                </svg>
+                                <span class="surface-name">LAN</span>
+                            </label>
+                            <label class="surface-card" data-mode="wan">
+                                <input type="radio" name="netMode" value="wan">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="4" y="19" width="22" height="16" rx="3" fill="#e7efff" stroke="#6f97e0"/>
+                                    <line x1="8" y1="25" x2="22" y2="25" stroke="#9bb6e8" stroke-width="2"/>
+                                    <rect x="66" y="19" width="22" height="16" rx="3" fill="#fff" stroke="#c4c4c4"/>
+                                    <line x1="70" y1="25" x2="84" y2="25" stroke="#c4c4c4" stroke-width="2"/>
+                                    <line x1="26" y1="27" x2="35" y2="27" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="57" y1="27" x2="66" y2="27" stroke="#9bb6e8" stroke-width="2"/>
+                                    <path d="M38 32a5.5 5.5 0 0 1-.7-10.9 8 8 0 0 1 15.6-2.3A6 6 0 0 1 54 32z" fill="#d6e4ff" stroke="#6f97e0"/>
+                                </svg>
+                                <span class="surface-name">WAN (online)</span>
+                            </label>
+                        </div>
+
+                        <div class="net-mode-status">
+                            <div class="field-note" id="netModeState" hidden></div>
+                            <div class="bind-row">
+                                <button type="button" class="btn btn-ghost btn-sm" id="netModeApply" hidden>Set &amp; Restart</button>
+                                <button type="button" class="btn btn-ghost btn-sm" id="remoteRecheck">Recheck</button>
+                            </div>
+                        </div>
+
+                        <!-- LOCAL: nothing to configure -->
+                        <section class="net-panel" id="netPanelLocal" hidden>
+                            <p class="help-text">Only browsers on this machine can connect.</p>
+                        </section>
+
+                        <!-- LAN: this machine + the remote one, side by side -->
+                        <section class="net-panel" id="netPanelLan" hidden>
+                            <div class="net-grid">
+                                <div class="net-col">
+                                    <h3>This machine <span class="muted">(runs the server)</span></h3>
+                                    <p class="help-text">
+                                        Allow inbound TCP on port <code id="lanFirewallPort">8772</code>.
+                                    </p>
+                                    <details class="adv-disclosure" id="lanAdvanced">
+                                        <summary>Advanced</summary>
+                                        <div class="bind-row">
+                                            <input type="text" id="lanBindHost" spellcheck="false" value="0.0.0.0"
+                                                   aria-label="Bind address">
+                                        </div>
+                                        <div class="help-text">
+                                            Bind address; <code>0.0.0.0</code> = every interface. Overridden by
+                                            <code id="remoteBindEnv">BROWSERPLUG_WS_HOST</code> when set.
+                                        </div>
+                                    </details>
+                                </div>
+                                <div class="net-col">
+                                    <h3>Remote machine <span class="muted">(the other browser)</span></h3>
+                                    <ol class="steps">
+                                        <li>In its options page, set <strong>Hostname</strong> and
+                                            <strong>WebSocket Port</strong> to one of:
+                                            <div class="code-block" id="lanAddrList"><code class="muted">looking for the server…</code></div>
+                                            <span class="muted">The highlighted address is usually your LAN.</span>
+                                        </li>
+                                        <li>
+                                            <button type="button" class="btn btn-ghost btn-sm" id="lanTokenCopy">Copy a new device token</button>
+                                            then paste it into its <strong>Connection token</strong> field.
+                                        </li>
+                                        <li>Save its settings, then check from the remote browser:
+                                            <div class="bind-row">
+                                                <button type="button" class="btn btn-ghost btn-sm" id="lanConnTest">Test connection</button>
+                                            </div>
+                                            <div class="field-note" id="lanConnTestResult" hidden></div>
+                                        </li>
+                                    </ol>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- WAN: same two columns, plus the online reachability check -->
+                        <section class="net-panel" id="netPanelWan" hidden>
+                            <div class="net-grid">
+                                <div class="net-col">
+                                    <h3>This machine <span class="muted">(runs the server)</span></h3>
+                                    <div class="connection-status net-reach">
+                                        <div id="wanReachIndicator" class="status-indicator"></div>
+                                        <span id="wanReachText">Not checked</span>
+                                        <button type="button" class="btn btn-ghost btn-sm" id="wanReachRefresh">Refresh</button>
+                                    </div>
+                                    <div class="help-text">
+                                        <a id="wanReachLink" target="_blank" rel="noreferrer" hidden>Full check report</a>
+                                    </div>
+                                    <p class="help-text">
+                                        Allow inbound TCP on port <code id="wanFirewallPort">8772</code> and
+                                        forward it on your router.
+                                    </p>
+                                    <details class="adv-disclosure" id="wanAdvanced">
+                                        <summary>Advanced</summary>
+                                        <div class="bind-row">
+                                            <input type="text" id="wanBindHost" spellcheck="false" value="0.0.0.0"
+                                                   aria-label="Bind address">
+                                        </div>
+                                        <div class="help-text">
+                                            Bind address; <code>0.0.0.0</code> = every interface. Overridden by
+                                            <code id="wanBindEnv">BROWSERPLUG_WS_HOST</code> when set.
+                                        </div>
+                                        <div class="field">
+                                            <label for="wanCheckTemplate">Custom check URL template</label>
+                                            <input type="text" id="wanCheckTemplate" spellcheck="false"
+                                                   placeholder="https://check-host.net/check-http?host={target}&amp;max_nodes=3">
+                                            <div class="help-text">
+                                                Must contain <code>{target}</code>. Empty = the check-host.net default.
+                                            </div>
+                                        </div>
+                                    </details>
+                                </div>
+                                <div class="net-col">
+                                    <h3>Remote machine <span class="muted">(the other browser)</span></h3>
+                                    <div class="field">
+                                        <label for="wanPublicAddr">Public address
+                                            <span class="muted">(auto-detected; edit for DDNS)</span></label>
+                                        <input type="text" id="wanPublicAddr" spellcheck="false" placeholder="detecting…">
+                                    </div>
+                                    <div class="code-block" id="wanPublicUrl"><code class="muted">ws://…</code></div>
+                                    <ol class="steps">
+                                        <li>
+                                            <button type="button" class="btn btn-ghost btn-sm" id="wanTokenCopy">Copy a new device token</button>
+                                            then paste it into the remote browser's <strong>Connection token</strong> field.
+                                        </li>
+                                        <li>In its options page, set <strong>Hostname</strong> and
+                                            <strong>WebSocket Port</strong> to the address above, save, then
+                                            check from there:
+                                            <div class="bind-row">
+                                                <button type="button" class="btn btn-ghost btn-sm" id="wanConnTest">Test connection</button>
+                                            </div>
+                                            <div class="field-note" id="wanConnTestResult" hidden></div>
+                                        </li>
+                                    </ol>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="help-text" id="wsCleartextWarning" hidden>
+                            <strong>Encrypted with the device token.</strong> Anyone who can reach the
+                            port can still see that a BrowserPlug server answers there; over the internet,
+                            prefer a tunnel (SSH, Tailscale, WireGuard).
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Default browser: which browser the server drives for an agent that
+                     never picked one, and whether it may start that browser itself. The
+                     setting is the SERVER's (its config.json), not this browser's, so
+                     every browser's options page shows and edits the same value. -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                        <h2>Default browser</h2>
+                    </div>
+                    <p class="card-desc">Which browser the server drives when an agent has not chosen one.</p>
+
+                    <div class="field">
+                        <label for="defaultBrowserSelect">Default browser</label>
+                        <select id="defaultBrowserSelect">
+                            <option value="first_started">First started</option>
+                        </select>
+                        <div class="help-text">
+                            Only browsers connected now are listed; one you picked stays listed as
+                            <em>not connected</em>. <strong>First started</strong>: the first browser to connect.
+                        </div>
+                        <div class="field-note" id="defaultBrowserNote" hidden></div>
+                    </div>
+
+                    <div class="field" id="defaultBrowserLaunchField" hidden>
+                        <label class="checkbox-label" for="defaultBrowserAutoLaunch">
+                            <input type="checkbox" id="defaultBrowserAutoLaunch">
+                            Let the server start this browser when none is connected
+                        </label>
+                        <div class="help-text">
+                            Only when nothing is connected; the browser must be on the server's machine.
+                        </div>
+                    </div>
+
+                    <div class="field field-narrow" id="defaultBrowserArgsField" hidden>
+                        <label for="defaultBrowserArgs">Startup arguments</label>
+                        <input type="text" id="defaultBrowserArgs" autocomplete="off" spellcheck="false"
+                               readonly placeholder="none">
+                        <div class="help-text">
+                            Read-only. Set <code>launch_args</code> under <code>default_browser</code> in
+                            the server's <code>config.json</code>.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Extension interface -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                        </svg>
+                        <h2>Extension interface</h2>
+                    </div>
+                    <div class="field">
+                        <label id="uiSurfaceLabel">UI surface</label>
+                        <div class="surface-options" id="uiSurfaceOptions" role="radiogroup" aria-labelledby="uiSurfaceLabel">
+                            <label class="surface-card desktop-only" data-surface="popup">
+                                <input type="radio" name="uiSurface" value="popup">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="6" y="8" width="80" height="44" rx="4" fill="#fff" stroke="#c4c4c4"/>
+                                    <rect x="6" y="8" width="80" height="9" rx="4" fill="#f0f0f0" stroke="#c4c4c4"/>
+                                    <circle cx="72" cy="12.5" r="2" fill="#8aa9e6"/>
+                                    <rect x="52" y="20" width="30" height="26" rx="3" fill="#e7efff" stroke="#6f97e0"/>
+                                    <line x1="56" y1="27" x2="78" y2="27" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="56" y1="33" x2="74" y2="33" stroke="#c3d3f2" stroke-width="2"/>
+                                    <line x1="56" y1="39" x2="76" y2="39" stroke="#c3d3f2" stroke-width="2"/>
+                                </svg>
+                                <span class="surface-name">Popup</span>
+                            </label>
+                            <label class="surface-card desktop-only" data-surface="detached">
+                                <input type="radio" name="uiSurface" value="detached">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="32" y="6" width="56" height="38" rx="4" fill="#fff" stroke="#c4c4c4"/>
+                                    <rect x="32" y="6" width="56" height="8" rx="4" fill="#f0f0f0" stroke="#c4c4c4"/>
+                                    <rect x="6" y="24" width="46" height="30" rx="3" fill="#e7efff" stroke="#6f97e0"/>
+                                    <rect x="6" y="24" width="46" height="8" rx="3" fill="#d6e4ff" stroke="#6f97e0"/>
+                                    <circle cx="11" cy="28" r="1.5" fill="#6f97e0"/>
+                                    <line x1="11" y1="40" x2="46" y2="40" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="11" y1="46" x2="40" y2="46" stroke="#c3d3f2" stroke-width="2"/>
+                                </svg>
+                                <span class="surface-name">Detached Popup</span>
+                            </label>
+                            <label class="surface-card desktop-only" data-surface="sidebar">
+                                <input type="radio" name="uiSurface" value="sidebar">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="6" y="8" width="80" height="44" rx="4" fill="#fff" stroke="#c4c4c4"/>
+                                    <rect x="6" y="8" width="80" height="9" rx="4" fill="#f0f0f0" stroke="#c4c4c4"/>
+                                    <rect x="60" y="17" width="25" height="34" fill="#e7efff" stroke="#6f97e0"/>
+                                    <line x1="64" y1="25" x2="80" y2="25" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="64" y1="31" x2="78" y2="31" stroke="#c3d3f2" stroke-width="2"/>
+                                    <line x1="64" y1="37" x2="80" y2="37" stroke="#c3d3f2" stroke-width="2"/>
+                                    <line x1="13" y1="26" x2="51" y2="26" stroke="#e4e4e4" stroke-width="2"/>
+                                    <line x1="13" y1="33" x2="51" y2="33" stroke="#e4e4e4" stroke-width="2"/>
+                                    <line x1="13" y1="40" x2="43" y2="40" stroke="#e4e4e4" stroke-width="2"/>
+                                </svg>
+                                <span class="surface-name">Sidebar</span>
+                            </label>
+                            <label class="surface-card desktop-only" data-surface="tab">
+                                <input type="radio" name="uiSurface" value="tab">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="6" y="10" width="80" height="42" rx="4" fill="#fff" stroke="#c4c4c4"/>
+                                    <rect x="10" y="7" width="20" height="8" rx="2" fill="#f0f0f0" stroke="#c4c4c4"/>
+                                    <rect x="32" y="7" width="20" height="8" rx="2" fill="#f0f0f0" stroke="#c4c4c4"/>
+                                    <rect x="54" y="6" width="22" height="9" rx="2" fill="#e7efff" stroke="#6f97e0"/>
+                                    <line x1="12" y1="25" x2="80" y2="25" stroke="#9bb6e8" stroke-width="2"/>
+                                    <line x1="12" y1="32" x2="80" y2="32" stroke="#c3d3f2" stroke-width="2"/>
+                                    <line x1="12" y1="39" x2="66" y2="39" stroke="#c3d3f2" stroke-width="2"/>
+                                </svg>
+                                <span class="surface-name">Separate tab</span>
+                            </label>
+                            <!-- Firefox for Android has exactly one surface, and it IS the
+                                 popup: tapping the extension covers the page with it. So this
+                                 card carries data-surface="popup" like the desktop Popup card
+                                 above — same stored value, a name and a picture that match what
+                                 a phone actually does. Only ever one of the two is visible, and
+                                 uiSurface keeps syncing to desktop as a value it understands. -->
+                            <label class="surface-card mobile-only" data-surface="popup">
+                                <input type="radio" name="uiSurface" value="popup">
+                                <svg class="surface-mock" viewBox="0 0 92 60" fill="none"
+                                     xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <defs>
+                                        <filter id="ovShadow" x="-40%" y="-40%" width="190%" height="190%">
+                                            <feDropShadow dx="0.8" dy="1.4" stdDeviation="0.9" flood-color="#33415577"/>
+                                        </filter>
+                                    </defs>
+                                    <!-- the ordinary browser window, behind -->
+                                    <path d="M 11.0 10.0 L 69.0 13.0 L 69.0 40.5 L 11.0 42.0 Z" fill="#fff" stroke="#c4c4c4" stroke-linejoin="round"/>
+                                    <path d="M 11.0 10.0 L 69.0 13.0 L 69.0 19.1 L 11.0 17.0 Z" fill="#f0f0f0" stroke="#c4c4c4" stroke-linejoin="round"/>
+                                    <path d="M 15.1 23.5 L 64.9 24.5" stroke="#e4e4e4" stroke-width="2"/>
+                                    <path d="M 15.1 29.2 L 64.9 29.5" stroke="#e4e4e4" stroke-width="2"/>
+                                    <path d="M 15.1 34.9 L 52.8 34.6" stroke="#e4e4e4" stroke-width="2"/>
+                                    <!-- the extension, same size, on top -->
+                                    <g filter="url(#ovShadow)">
+                                        <path d="M 18.0 15.0 L 76.0 18.0 L 76.0 45.5 L 18.0 47.0 Z" fill="#e7efff" stroke="#6f97e0" stroke-linejoin="round"/>
+                                        <path d="M 18.0 15.0 L 76.0 18.0 L 76.0 24.1 L 18.0 22.0 Z" fill="#d6e4ff" stroke="#6f97e0" stroke-linejoin="round"/>
+                                        <path d="M 29.6 19.0 L 23.2 18.7 M 25.8 16.5 L 23.2 18.7 L 25.8 21.2"
+                                              stroke="#4a76c4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M 22.6 28.5 L 69.0 29.4" stroke="#9bb6e8" stroke-width="2"/>
+                                        <path d="M 22.6 34.2 L 58.6 34.4" stroke="#c3d3f2" stroke-width="2"/>
+                                        <path d="M 22.6 39.9 L 65.6 39.6" stroke="#c3d3f2" stroke-width="2"/>
+                                    </g>
+                                </svg>
+                                <span class="surface-name">Overlay</span>
+                            </label>
+                        </div>
+                        <div class="help-text mobile-only">
+                            <strong>Overlay</strong> is the only interface Firefox for Android offers.
+                        </div>
+                        <div class="btn-row mobile-only">
+                            <button type="button" class="btn btn-ghost btn-sm" id="openOverlay">Open Extension Overlay</button>
+                            <div class="field-note" id="openOverlayNote" hidden></div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="hideEmptySessions">
+                            <input type="checkbox" id="hideEmptySessions" checked>
+                            Hide command-less sessions in the Connections panel
+                        </label>
+                        <div class="help-text">
+                            Hides sessions that never ran a command; the “N sessions” count follows.
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="toolCallSort">Tool call preview sorting</label>
+                        <select id="toolCallSort">
+                            <option value="bottom">Latest on bottom</option>
+                            <option value="top">Latest on top</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Captured bodies -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                        <h2>Captured bodies</h2>
+                    </div>
+                    <p class="card-desc">
+                        Bodies reach the agent <strong>raw</strong> by default.
+                        <code>Authorization</code> and <code>Cookie</code> headers are always redacted.
+                    </p>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="censorSecrets">
+                            <input type="checkbox" id="censorSecrets">
+                            Censor secrets in captured bodies
+                        </label>
+                        <div class="help-text">
+                            Redacts the values of credential-looking keys (password, token, api_key, …) in
+                            JSON, form and multipart bodies. Key names only; use a pattern below for
+                            anything else.
+                        </div>
+                    </div>
+
+                    <div class="field-row two" id="censorPatternsField" hidden>
+                        <div class="field">
+                            <label for="censorPatterns">Custom patterns (regular expressions)</label>
+                            <textarea id="censorPatterns" rows="5" spellcheck="false" autocomplete="off"
+                                      autocapitalize="off" placeholder="sk-[A-Za-z0-9]{20,}&#10;eyJ[\w-]+\.[\w-]+\.[\w-]+"></textarea>
+                            <div class="help-text">
+                                One JavaScript regex per line (up to 20, 200 characters each); each match
+                                becomes <code>&lt;redacted&gt;</code>. Case-sensitive; use <code>(?i:&hellip;)</code>
+                                to ignore case. Describe the shape of a secret, never the secret.
+                            </div>
+                            <div id="censorPatternFeedback" aria-live="polite"></div>
+                        </div>
+                        <div class="field">
+                            <label for="censorTestInput">Test</label>
+                            <textarea id="censorTestInput" rows="5" maxlength="3000" spellcheck="false" autocomplete="off"
+                                      autocapitalize="off" placeholder="Paste a sample body here"></textarea>
+                            <pre class="censor-test-output" id="censorTestOutput" aria-live="polite"></pre>
+                            <div class="help-text" id="censorTestNote"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ---------------------- Advanced ---------------------- -->
+            <section class="pane" id="pane-advanced" role="tabpanel" aria-labelledby="tab-advanced" tabindex="0" hidden>
+                <header class="pane-header">
+                    <svg class="pane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+                        <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+                        <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+                        <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+                    </svg>
+                    <h1>Advanced</h1>
+                </header>
+
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/>
+                        </svg>
+                        <h2>Advanced connection settings</h2>
+                    </div>
+                    <div class="field-row">
+                        <div class="field">
+                            <label for="retryInterval">Retry Interval (ms)</label>
+                            <input type="number" id="retryInterval" value="5000" min="1000" max="60000" title="Time between reconnection attempts (1000-60000 ms)">
+                        </div>
+
+                        <div class="field">
+                            <label for="maxRetries">Max Retry Attempts</label>
+                            <input type="number" id="maxRetries" value="-1" min="-1" max="100" title="Maximum reconnection attempts (-1 for unlimited)">
+                        </div>
+
+                        <div class="field">
+                            <label for="pingTimeout">Ping Timeout (ms)</label>
+                            <input type="number" id="pingTimeout" value="5000" min="1000" max="30000" title="Timeout for ping requests (1000-30000 ms)">
+                        </div>
+                    </div>
+
+                    <div class="btn-row">
+                        <button type="button" id="saveAdvanced" class="btn btn-primary">Save Advanced Settings</button>
+                        <button type="button" id="resetDefaults" class="btn btn-ghost">Reset all settings to Defaults</button>
+                    </div>
+                </div>
+
+                <!-- Provider-specific settings -->
+
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>Anthropic sessions</h2>
+                    </div>
+                    <p class="card-desc">
+                        Account-wide claude.ai usage, read with this browser's <code>claude.ai</code> cookies.
+                    </p>
+
+                    <div class="field token-state" id="anthropicAuth">
+                        <div class="token-state-line">
+                            <span class="token-state-dot" id="anthropicAuthDot"></span>
+                            <span id="anthropicAuthText">Checking your claude.ai sign-in…</span>
+                        </div>
+                        <div class="help-text" id="anthropicAuthHelp"></div>
+                        <div class="btn-row">
+                            <button type="button" id="anthropicAuthRecheck" class="btn btn-ghost btn-sm">Re-check</button>
+                            <button type="button" id="anthropicSignIn" class="btn btn-ghost btn-sm" hidden>Open claude.ai to sign in</button>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="anthropicDisplayMode">Anthropic usage display</label>
+                        <select id="anthropicDisplayMode">
+                            <option value="disabled">Disabled</option>
+                            <option value="tab">Visible only in Usage tab</option>
+                            <option value="client">Visible in Usage tab and below client</option>
+                        </select>
+                        <div class="help-text">Disabled also stops the claude.ai requests.</div>
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="anthropicBackgroundRefresh">
+                            <input type="checkbox" id="anthropicBackgroundRefresh">
+                            <span>Query every <span data-refresh-minutes-of="anthropicUsageRefreshMinutes">5</span> min in background to update the usage progress bar</span>
+                        </label>
+                    </div>
+
+                    <div class="field">
+                        <label for="anthropicPeakLeadMinutes">Show Anthropic peak hours indicator minutes before it begins</label>
+                        <input type="number" id="anthropicPeakLeadMinutes" value="0" min="0" max="240">
+                        <div class="help-text">0 = only during peak hours.</div>
+                    </div>
+
+                    <div class="field">
+                        <label for="anthropicUsageRefreshMinutes">Session usage refresh rate (minutes)</label>
+                        <input type="number" id="anthropicUsageRefreshMinutes" value="5" min="1" max="60">
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="anthropicShowWeekly">
+                            <input type="checkbox" id="anthropicShowWeekly">
+                            Show weekly usage
+                        </label>
+                    </div>
+                </div>
+
+
+                <!-- OpenAI sessions (chatgpt.com usage windows; ChatGPT + Codex share them) -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>OpenAI sessions</h2>
+                    </div>
+                    <p class="card-desc">
+                        Account-wide chatgpt.com usage (ChatGPT and Codex share it), read with this
+                        browser's <code>chatgpt.com</code> cookies.
+                    </p>
+
+                    <div class="field token-state" id="openaiAuth">
+                        <div class="token-state-line">
+                            <span class="token-state-dot" id="openaiAuthDot"></span>
+                            <span id="openaiAuthText">Checking your chatgpt.com sign-in…</span>
+                        </div>
+                        <div class="help-text" id="openaiAuthHelp"></div>
+                        <div class="btn-row">
+                            <button type="button" id="openaiAuthRecheck" class="btn btn-ghost btn-sm">Re-check</button>
+                            <button type="button" id="openaiSignIn" class="btn btn-ghost btn-sm" hidden>Open chatgpt.com to sign in</button>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="openaiDisplayMode">OpenAI usage display</label>
+                        <select id="openaiDisplayMode">
+                            <option value="disabled">Disabled</option>
+                            <option value="tab">Visible only in Usage tab</option>
+                            <option value="client">Visible in Usage tab and below client</option>
+                        </select>
+                        <div class="help-text">Ships disabled. Disabled also stops the chatgpt.com requests.</div>
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="openaiBackgroundRefresh">
+                            <input type="checkbox" id="openaiBackgroundRefresh">
+                            <span>Query every <span data-refresh-minutes-of="openaiUsageRefreshMinutes">5</span> min in background to update the usage progress bar</span>
+                        </label>
+                    </div>
+
+                    <div class="field">
+                        <label for="openaiUsageRefreshMinutes">Session usage refresh rate (minutes)</label>
+                        <input type="number" id="openaiUsageRefreshMinutes" value="5" min="1" max="60">
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="openaiShowWeekly">
+                            <input type="checkbox" id="openaiShowWeekly">
+                            Show weekly usage
+                        </label>
+                    </div>
+                </div>
+
+                <!-- GitHub Copilot sessions (github.com monthly quotas + what VS Code is doing) -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>GitHub Copilot sessions</h2>
+                    </div>
+                    <p class="card-desc">
+                        Your github.com <strong>monthly</strong> Copilot quotas, read with this browser's
+                        <code>github.com</code> cookies. If VS Code uses another GitHub account, the row
+                        says <strong>other account</strong>.
+                    </p>
+
+                    <div class="field token-state" id="copilotAuth">
+                        <div class="token-state-line">
+                            <span class="token-state-dot" id="copilotAuthDot"></span>
+                            <span id="copilotAuthText">Checking your github.com sign-in…</span>
+                        </div>
+                        <div class="help-text" id="copilotAuthHelp"></div>
+                        <div class="btn-row">
+                            <button type="button" id="copilotAuthRecheck" class="btn btn-ghost btn-sm">Re-check</button>
+                            <button type="button" id="copilotSignIn" class="btn btn-ghost btn-sm" hidden>Open github.com to sign in</button>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="copilotDisplayMode">GitHub Copilot usage display</label>
+                        <select id="copilotDisplayMode">
+                            <option value="disabled">Disabled</option>
+                            <option value="tab">Visible only in Usage tab</option>
+                            <option value="client">Visible in Usage tab and below client</option>
+                        </select>
+                        <div class="help-text">Disabled also stops the github.com requests.</div>
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="copilotBackgroundRefresh">
+                            <input type="checkbox" id="copilotBackgroundRefresh">
+                            <span>Query every <span data-refresh-minutes-of="copilotUsageRefreshMinutes">5</span> min in background to update the usage progress bar</span>
+                        </label>
+                    </div>
+
+                    <div class="field">
+                        <label for="copilotUsageRefreshMinutes">Session usage refresh rate (minutes)</label>
+                        <input type="number" id="copilotUsageRefreshMinutes" value="5" min="1" max="60">
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="copilotShowCompletions">
+                            <input type="checkbox" id="copilotShowCompletions">
+                            Show code completions quota
+                        </label>
+                    </div>
+                </div>
+
+                <!-- DeepSeek sessions (peak/off-peak price clock) -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>DeepSeek sessions</h2>
+                    </div>
+                    <p class="card-desc">
+                        DeepSeek bills double at peak: <strong>01:00–04:00</strong> and
+                        <strong>06:00–10:00 UTC</strong>, Monday to Friday. Shown on
+                        <strong>DSH</strong> rows from your own clock; nothing is fetched.
+                    </p>
+
+                    <div class="field">
+                        <label for="deepseekDisplayMode">DeepSeek price clock display</label>
+                        <select id="deepseekDisplayMode">
+                            <option value="disabled">Disabled</option>
+                            <option value="tab">Visible only in Usage tab</option>
+                            <option value="client">Visible in Usage tab and below client</option>
+                        </select>
+                        <div class="help-text">Ships disabled.</div>
+                    </div>
+
+                    <div class="field">
+                        <label for="deepseekPeakLeadMinutes">Show DeepSeek peak hours indicator minutes before it begins</label>
+                        <input type="number" id="deepseekPeakLeadMinutes" value="0" min="0" max="240">
+                        <div class="help-text">0 = only during peak hours.</div>
+                    </div>
+                </div>
+
+                <!-- Kilo sessions (provider/model detection + name clarification) -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>Kilo sessions</h2>
+                    </div>
+                    <p class="card-desc">Each Kilo&nbsp;CLI, pi and Copilot Chat session's provider and model, as a badge.</p>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="kiloLoadDetails">
+                            <input type="checkbox" id="kiloLoadDetails" checked>
+                            Load Kilo session details from its logs
+                        </label>
+                        <div class="help-text">
+                            Reads local logs and transcripts on the server. Adds a little latency to each
+                            popup refresh; tool calls are unaffected.
+                        </div>
+
+                        <label class="checkbox-label" for="kiloClarifyNames" style="margin-top: 12px; margin-left: 26px;">
+                            <input type="checkbox" id="kiloClarifyNames" checked>
+                            Clarify model &amp; provider names (models.dev)
+                        </label>
+                        <div class="help-text" style="margin-left: 26px;">
+                            Needs the option above. Cached locally.
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ---------------------- Health ---------------------- -->
+            <section class="pane" id="pane-health" role="tabpanel" aria-labelledby="tab-health" tabindex="0" hidden>
+                <header class="pane-header">
+                    <svg class="pane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                    </svg>
+                    <h1>Health</h1>
+                </header>
+
+                <!-- Live connection map -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="5" cy="12" r="2.2"/>
+                            <circle cx="19" cy="5" r="2.2"/>
+                            <circle cx="19" cy="19" r="2.2"/>
+                            <line x1="7.1" y1="11" x2="16.9" y2="5.9"/>
+                            <line x1="7.1" y1="13" x2="16.9" y2="18.1"/>
+                        </svg>
+                        <h2>Connection map</h2>
+                        <span class="map-live paused" id="mapLive"
+                              title="Redraws every 2 seconds while this tab is visible">
+                            <span class="map-live-dot"></span><span id="mapLiveText">paused</span>
+                        </span>
+                    </div>
+                    <p class="card-desc">
+                        Live view of everything connected to the server. The <strong>orange arrow</strong>
+                        points from a client to the browser its calls land in; a remote browser is dashed.
+                        <span class="desktop-only">Hover for details; scroll to zoom, drag to pan, double-click to reset.</span><span
+                        class="mobile-only">Drag to pan, double-tap to reset.</span>
+                    </p>
+                    <div class="conn-map" id="connMap">
+                        <svg id="connMapSvg" xmlns="http://www.w3.org/2000/svg" role="img"
+                             aria-label="Live map of connections to the BrowserPlug server">
+                            <defs>
+                                <!-- Arrowhead for the routing line (client → the browser
+                                     its calls actually land in). -->
+                                <marker id="mapRouteArrow" viewBox="0 0 10 10" refX="9" refY="5"
+                                        markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                                    <path class="map-route-arrow" d="M 0 0 L 10 5 L 0 10 z"/>
+                                </marker>
+                            </defs>
+                            <!-- Everything is drawn inside this group: zoom/pan is one
+                                 transform on it, leaving the viewBox as pure layout space. -->
+                            <g id="connMapViewport"></g>
+                        </svg>
+                        <div class="conn-map-msg" id="connMapMsg">Waiting for the first snapshot…</div>
+                        <div class="conn-map-zoom" role="group" aria-label="Connection map zoom">
+                            <button type="button" id="connMapZoomOut" class="map-zoom-btn"
+                                    title="Zoom out" aria-label="Zoom out">−</button>
+                            <button type="button" id="connMapZoomReset" class="map-zoom-btn map-zoom-level"
+                                    title="Reset zoom and position" aria-label="Reset zoom">100%</button>
+                            <button type="button" id="connMapZoomIn" class="map-zoom-btn"
+                                    title="Zoom in" aria-label="Zoom in">+</button>
+                        </div>
+                    </div>
+                    <div class="conn-map-legend">
+                        <span class="lg"><span class="lg-dot lg-server"></span>server</span>
+                        <span class="lg"><span class="lg-dot lg-client"></span>MCP client</span>
+                        <span class="lg"><span class="lg-dot lg-launcher"></span>launcher</span>
+                        <span class="lg"><span class="lg-dot lg-ext"></span>extension</span>
+                        <span class="lg"><span class="lg-dot lg-browser"></span>browser</span>
+                        <span class="lg"><span class="lg-line"></span>remote browser</span>
+                        <span class="lg"><span class="lg-line lg-route"></span>routed to</span>
+                        <span class="lg lg-src" id="connMapSource"></span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>Server health</h2>
+                    </div>
+
+                    <div class="health-controls">
+                        <button type="button" id="healthRefresh" class="btn btn-primary">Refresh</button>
+                        <button type="button" id="healthRestart" class="btn btn-ghost">Restart server…</button>
+                    </div>
+
+                    <p class="health-url">
+                        Polling <code id="healthUrlDisplay">http://localhost:2830/health</code>
+                    </p>
+
+                    <div class="health-output" id="healthOutput" aria-live="polite" aria-busy="false">
+                        <div class="health-placeholder">
+                            Click <strong>Refresh</strong> to fetch the server's health status.
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Floating status toast (visible from any tab; live region for screen readers) -->
+    <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Connection-map tooltip: ONE floating element, repopulated per hovered node -->
+    <div id="connMapTip" class="conn-map-tip" role="tooltip" aria-hidden="true"></div>
+
+    <!-- Restart confirmation modal. A native <dialog>: the form's method="dialog"
+         closes it and sets returnValue to the pressed button's value. -->
+    <dialog id="restartDialog" class="modal" aria-labelledby="restartDialogTitle">
+        <form method="dialog" class="modal-card">
+            <h2 class="modal-title" id="restartDialogTitle">Restart the BrowserPlug server?</h2>
+            <p class="modal-body">
+                This cycles the <strong>shared</strong> server process that every connected
+                client uses. In-flight tool calls will be interrupted; clients reconnect
+                automatically within a few seconds and pick up any code changes.
+            </p>
+            <p class="modal-target">
+                Sent over the live WebSocket; falls back to
+                <code id="restartUrlDisplay">http://localhost:2830/restart</code>
+            </p>
+            <div class="modal-actions">
+                <button type="submit" value="cancel" class="btn btn-ghost" id="restartCancel" autofocus>Cancel</button>
+                <button type="submit" value="confirm" class="btn btn-danger" id="restartConfirm">Restart server</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="ws-crypto.js"></script>
+    <script src="vendor/copilot-view.js"></script>
+    <script src="body-censor.js"></script>
+    <script src="censor-panel.js"></script>
+    <script src="options.js"></script>
+    <script src="wan-diagnosis.js"></script>
+</body>
+</html>

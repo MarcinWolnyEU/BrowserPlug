@@ -1,0 +1,6 @@
+{
+  "toolbarMenuOptions": {
+    "message": "Opzioni",
+    "description": "Label for the item added to the toolbar button's right-click menu; mirrors Firefox's own about:addons wording (Windows string; other platforms say 'Preferenze')."
+  }
+}

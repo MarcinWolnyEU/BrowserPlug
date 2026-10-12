@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Two competing card grids on one page</title>
+<!--
+  Fixture: TWO repeated patterns, only one of them the answer.
+
+  Every real marketplace listing looks like this: a small sponsored strip above the
+  organic results, both made of priced, linked, structurally-identical cards. The
+  detector has to choose, and nothing pinned that choice before this fixture — the
+  scorer could have picked the 3-card sponsored strip and returned a confident,
+  complete-looking table of the wrong three products.
+
+  GROUND TRUTH: 3 sponsored cards, 18 organic cards. The organic grid must win, and
+  the sponsored strip must be reported as the runner-up so the choice is auditable
+  (and reversible with item_selector) rather than silent.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  .strip, .results { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .promo, .offer { border: 1px solid #ccc; border-radius: 8px; padding: 10px; }
+  .promo { background: #fffbe6; }
+  h2 { font-size: 15px; margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<h1>dysk twardy 8TB</h1>
+
+<section aria-label="Promowane">
+  <p>Promowane oferty</p>
+  <div class="strip" id="sponsored">
+    <article class="promo"><a href="/oferta/promo-1"><h2>PROMO Drive Alpha 8TB</h2></a>
+      <div class="price">1499,00 z&#x142;</div></article>
+    <article class="promo"><a href="/oferta/promo-2"><h2>PROMO Drive Beta 8TB</h2></a>
+      <div class="price">1599,00 z&#x142;</div></article>
+    <article class="promo"><a href="/oferta/promo-3"><h2>PROMO Drive Gamma 8TB</h2></a>
+      <div class="price">1699,00 z&#x142;</div></article>
+  </div>
+</section>
+
+<section aria-label="Wyniki">
+  <p>Wyniki wyszukiwania</p>
+  <div class="results" id="organic">
+    <article class="offer"><a href="/oferta/o-1"><h2>Seagate BarraCuda 8TB</h2></a><p class="meta">SATA III &middot; 3.5 cala &middot; 5400 obr</p><div class="price">699,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-2"><h2>Toshiba P300 8TB</h2></a><p class="meta">SATA III &middot; 3.5 cala &middot; 7200 obr</p><div class="price">729,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-3"><h2>WD Blue 8TB</h2></a><p class="meta">SATA III &middot; 3.5 cala &middot; 5400 obr</p><div class="price">749,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-4"><h2>WD Red Plus 8TB</h2></a><p class="meta">NAS &middot; 3.5 cala &middot; 5640 obr</p><div class="price">899,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-5"><h2>Seagate IronWolf 8TB</h2></a><p class="meta">NAS &middot; 3.5 cala &middot; 7200 obr</p><div class="price">949,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-6"><h2>Toshiba N300 8TB</h2></a><p class="meta">NAS &middot; 3.5 cala &middot; 7200 obr</p><div class="price">979,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-7"><h2>WD Purple 8TB</h2></a><p class="meta">Monitoring &middot; 3.5 cala</p><div class="price">829,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-8"><h2>Seagate SkyHawk 8TB</h2></a><p class="meta">Monitoring &middot; 3.5 cala</p><div class="price">839,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-9"><h2>WD Gold 8TB</h2></a><p class="meta">Enterprise &middot; 3.5 cala &middot; 7200 obr</p><div class="price">1199,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-10"><h2>Seagate Exos 7E8 8TB</h2></a><p class="meta">Enterprise &middot; 3.5 cala &middot; 7200 obr</p><div class="price">1149,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-11"><h2>Toshiba MG06 8TB</h2></a><p class="meta">Enterprise &middot; 3.5 cala</p><div class="price">1099,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-12"><h2>HGST Ultrastar 8TB</h2></a><p class="meta">Enterprise &middot; 3.5 cala &middot; refurb</p><div class="price">549,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-13"><h2>WD Elements 8TB</h2></a><p class="meta">Zewnetrzny &middot; USB 3.0</p><div class="price">659,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-14"><h2>Seagate Expansion 8TB</h2></a><p class="meta">Zewnetrzny &middot; USB 3.0</p><div class="price">669,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-15"><h2>Toshiba Canvio 8TB</h2></a><p class="meta">Zewnetrzny &middot; USB 3.2</p><div class="price">689,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-16"><h2>WD My Book 8TB</h2></a><p class="meta">Zewnetrzny &middot; USB 3.0</p><div class="price">709,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-17"><h2>LaCie d2 8TB</h2></a><p class="meta">Zewnetrzny &middot; USB-C</p><div class="price">1249,00 z&#x142;</div></article>
+    <article class="offer"><a href="/oferta/o-18"><h2>Seagate One Touch 8TB</h2></a><p class="meta">Zewnetrzny &middot; USB 3.0</p><div class="price">719,00 z&#x142;</div></article>
+  </div>
+</section>
+</body>
+</html>

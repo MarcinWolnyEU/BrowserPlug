@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Known length</title>
+<!--
+  Fixture: "paging past the end of a document returns an empty window".
+
+  The live shape: an x-kom product page of 973 extractable characters, read at
+  offset=3500, answered `[markdown] chars 3500-3500 of 973 (no content extracted --
+  try format="text" or a scope selector)`. The response ALREADY KNEW the document was
+  973 characters and that 3500 was past its end, and still advised changing the format.
+  Reproduced verbatim on example.org (149 chars) on 2026-08-03 before this fix.
+
+  Read this page with format="text" and scope="#body-text" to get a length that does
+  not move when the vendored Defuddle bundle is bumped -- markdown extraction length is
+  a moving target and must never be asserted as an absolute number.
+
+  GROUND TRUTH: #body-text contains EXACTLY 300 characters of innerText: three
+  100-character lines. innerText joins block-level children with "\n", so the total is
+  100 + 1 + 100 + 1 + 100 = 302 for the container; each <p> is exactly 100 chars.
+  Tests should read the length from the response's own "of N" field rather than
+  hard-coding it, and assert the RELATIONSHIP at offsets inside / exactly at / beyond N.
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  #body-text p { margin: 0; font-family: monospace; }
+</style>
+</head>
+<body>
+<h1>Known length document</h1>
+<div id="body-text"><p>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA</p><p>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</p><p>CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC</p></div>
+</body>
+</html>

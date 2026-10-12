@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ticking DOM</title>
+<!--
+  Fixture: a page whose DOM never stops changing after its load event.
+
+  navigate(wait="dom") waits for 100 ms without a mutation record on the body, for at
+  most 3 s after the load event. From the load event on, this page replaces the #tick
+  text on every message of a MessageChannel ping-pong (the handler posts the next message
+  to itself), so the DOM is never still for 100 ms: the wait must give up at its 3 s
+  bound and say the DOM was still changing, never report it stable.
+
+  Why a message loop: a background tab clamps timers and requestAnimationFrame to about
+  one a second, which would leave 100 ms gaps, and a chain of fetches depends on the
+  fixture server, so one slow round trip (a cold connection, a busy machine) leaves a
+  quiet window and the wait reports a stable DOM. Message events are neither clamped in a
+  background tab nor dependent on the network, so the stream does not pause on either.
+  The loop spins a core, which is fine for a page that lives about 3 s; it stops itself
+  after 20 s (a bounded message count and a deadline) so a leaked tab cannot burn CPU
+  forever.
+
+  GROUND TRUTH: #tick changes on every message, many times a second, for the first 20 s
+  after the load event and then stops; DISTINCTIVE_MARKER_TICKING_DOM is static text.
+-->
+</head>
+<body>
+<h1>Ticking DOM fixture</h1>
+<p>DISTINCTIVE_MARKER_TICKING_DOM</p>
+<p id="tick">0</p>
+<script>
+  window.addEventListener('load', function () {
+    var n = 0;
+    var deadline = performance.now() + 20000;
+    var tick = document.getElementById('tick');
+    var channel = new MessageChannel();
+    channel.port1.onmessage = function () {
+      tick.textContent = String(++n);
+      if (n < 5000000 && performance.now() < deadline) channel.port2.postMessage(0);
+    };
+    channel.port2.postMessage(0);
+  });
+</script>
+</body>
+</html>

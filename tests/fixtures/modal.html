@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug Deferred Modal Fixture</title>
+</head>
+<body>
+  <h1>Deferred modal fixture</h1>
+  <!--
+    Clicking "Open" reveals a role=dialog one tick later (like GitLab's
+    commit-message modal). page_click should report dialogOpened/domChanged;
+    page_wait_for should resolve on the dialog's selector/text.
+  -->
+  <button type="button" id="open" onclick="setTimeout(function(){document.getElementById('dlg').style.display='block';}, 300)">Open</button>
+
+  <div id="dlg" role="dialog" aria-label="Confirm" style="display:none">
+    <p>Are you sure?</p>
+    <button type="button" id="confirm" onclick="document.getElementById('result').textContent='CONFIRMED'">Save changes</button>
+  </div>
+
+  <div id="result"></div>
+</body>
+</html>

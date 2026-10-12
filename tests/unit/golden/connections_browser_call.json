@@ -1,0 +1,258 @@
+{
+  "count": 5,
+  "generated_hms": "12:00:00",
+  "generated_epoch": 1790676000.0,
+  "connections": [
+    {
+      "kind": "server",
+      "label": "BrowserPlug server",
+      "pid": 4242,
+      "version": "<SERVER_VERSION>",
+      "exe_path": "C:\\dr\\browserplug\\.venv\\Scripts\\python.exe",
+      "activity_hms": "12:00:00",
+      "activity_epoch": 1790676000.0,
+      "since_hms": "11:00:00",
+      "detail": "ws://192.168.0.114:8772  +  http://192.168.0.114:2830/mcp"
+    },
+    {
+      "kind": "extension",
+      "label": "Firefox Developer Edition",
+      "slot": 1,
+      "is_remote": false,
+      "remote_addr": "127.0.0.1",
+      "pid": 111,
+      "exe_path": "C:\\Program Files\\Firefox Developer Edition\\firefox.exe",
+      "engine": "gecko",
+      "platform": {
+        "os": "win",
+        "arch": "x86-64"
+      },
+      "browser_info": {
+        "name": "Firefox",
+        "version": "152.0",
+        "vendor": "Mozilla"
+      },
+      "version": "7.7.4",
+      "activity_hms": "11:59:59",
+      "activity_epoch": 1790675999.0,
+      "since_hms": "09:00:00",
+      "detail": "WebSocket: 8772"
+    },
+    {
+      "kind": "extension",
+      "label": "[Remote] Firefox for Android Nightly",
+      "slot": 2,
+      "is_remote": true,
+      "remote_addr": "192.168.0.7",
+      "pid": null,
+      "exe_path": null,
+      "engine": null,
+      "platform": {
+        "os": "android",
+        "arch": "arm64"
+      },
+      "browser_info": {
+        "name": "Firefox Nightly",
+        "version": "153.0"
+      },
+      "version": "7.7.3",
+      "activity_hms": "11:59:53",
+      "activity_epoch": 1790675993.0,
+      "since_hms": null,
+      "detail": "WebSocket: 8772 · from 192.168.0.7"
+    },
+    {
+      "kind": "mcp_client",
+      "label": "Claude Code — C:\\dr\\browserplug",
+      "friendly": "Claude Code",
+      "vendor": "Anthropic",
+      "cwd": "C:\\dr\\browserplug",
+      "pid": 777,
+      "launcher_pid": 888,
+      "launcher_version": "7.7.4",
+      "launcher_since_hms": "11:29:58",
+      "target_browser_slot": 2,
+      "target_browser_explicit": true,
+      "exe_path": "C:\\claude\\claude.exe",
+      "cmdline": "claude --api-key=*** --resume",
+      "since_hms": "11:30:00",
+      "started_hms": "11:30:00",
+      "session_count": 2,
+      "sessions": [
+        {
+          "id": "abc12345",
+          "last_activity_hms": "11:59:55",
+          "commands": [
+            {
+              "time_hms": "11:59:55",
+              "tool": "tabs",
+              "params": {
+                "action": "list"
+              }
+            },
+            {
+              "time_hms": "11:59:00",
+              "tool": "navigate",
+              "params": {
+                "url": "https://example.org/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+                "tab_id": 3,
+                "background": true,
+                "note": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "def67890",
+          "last_activity_hms": "11:59:59",
+          "commands": []
+        }
+      ],
+      "activity_hms": "11:59:59",
+      "activity_epoch": 1790675999.0,
+      "detail": "2 sessions"
+    },
+    {
+      "kind": "mcp_client",
+      "label": "GitLab Duo CLI — /work",
+      "friendly": "GitLab Duo CLI",
+      "vendor": "GitLab",
+      "cwd": "/work",
+      "pid": null,
+      "launcher_pid": null,
+      "launcher_version": null,
+      "launcher_since_hms": null,
+      "target_browser_slot": null,
+      "target_browser_explicit": false,
+      "exe_path": "/x/glab-cli/bin/duo.exe",
+      "cmdline": null,
+      "since_hms": "2026-09-28 12:00",
+      "started_hms": "12:00:00",
+      "session_count": 1,
+      "sessions": [
+        {
+          "id": "ghi11111",
+          "last_activity_hms": "11:58:20",
+          "commands": [
+            {
+              "time_hms": "11:58:20",
+              "tool": "server_info",
+              "params": {}
+            }
+          ]
+        }
+      ],
+      "activity_hms": "11:58:20",
+      "activity_epoch": 1790675900.0,
+      "detail": "1 session"
+    }
+  ],
+  "last_command": {
+    "tool": "tabs",
+    "action": "tabs.list",
+    "params": {
+      "action": "list"
+    },
+    "at": "2026-09-29 11:59:55.000",
+    "client_pid": 777,
+    "session": "abc12345",
+    "acknowledged_by_extension": true,
+    "acknowledged_at": "2026-09-29 11:59:55.085",
+    "outcome": {
+      "code": "ok",
+      "retry_safe": true
+    },
+    "browser_slot": 1,
+    "launcher_pid": 888,
+    "timings": {
+      "started_epoch": 1790675995.0,
+      "server_dispatch_ms": 3.0,
+      "browser_ms": 85.0,
+      "server_finalize_ms": 2.0,
+      "server_ms": 90.0,
+      "launcher_ms": 132.4,
+      "proxy_overhead_ms": 42.4,
+      "complete": true
+    }
+  },
+  "extension_instances": [
+    {
+      "slot": 1,
+      "pid": 111,
+      "name": "Firefox Developer Edition pid 111",
+      "friendly": "Firefox Developer Edition",
+      "version": "7.7.4",
+      "windows": 2,
+      "tabs": 14,
+      "active_tabs": 2,
+      "loaded_tabs": 9,
+      "active_tab_list": [
+        {
+          "id": 3,
+          "title": "t",
+          "last_hms": "11:59:00"
+        }
+      ],
+      "state_hms": "11:59:40",
+      "exe_path": "C:\\Program Files\\Firefox Developer Edition\\firefox.exe",
+      "last_connect_hms": "11:10:00",
+      "connect_count": 2,
+      "last_disconnect_hms": "11:05:00",
+      "last_close_code": 1006,
+      "last_close_reason": "abnormal",
+      "hello_latency_ms": 12.5,
+      "encrypted": true,
+      "reported_journal": [
+        "connected",
+        "hello"
+      ],
+      "last_activity_hms": "11:59:56",
+      "last_activity_epoch": 1790675996.0,
+      "last_action": "tabs.list",
+      "remote_addr": "127.0.0.1",
+      "is_remote": false,
+      "currently_connected": true
+    },
+    {
+      "slot": 2,
+      "pid": null,
+      "name": "remote-192.168.0.7",
+      "friendly": "Firefox for Android Nightly",
+      "version": "7.7.3",
+      "windows": null,
+      "tabs": null,
+      "active_tabs": null,
+      "loaded_tabs": null,
+      "active_tab_list": null,
+      "state_hms": null,
+      "exe_path": null,
+      "last_connect_hms": "12:00:00",
+      "connect_count": 3,
+      "last_disconnect_hms": null,
+      "last_close_code": null,
+      "last_close_reason": null,
+      "hello_latency_ms": null,
+      "encrypted": false,
+      "reported_journal": null,
+      "last_activity_hms": null,
+      "last_activity_epoch": null,
+      "last_action": null,
+      "remote_addr": "192.168.0.7",
+      "is_remote": true,
+      "currently_connected": true
+    }
+  ],
+  "browser_concurrency": {
+    "max_concurrent_per_browser": 3,
+    "max_queued_per_browser": 24,
+    "max_queue_wait_seconds": 60.0,
+    "env_vars": {
+      "concurrency": "BROWSERPLUG_MAX_CONCURRENT_REQUESTS",
+      "queue_depth": "BROWSERPLUG_MAX_QUEUE_DEPTH",
+      "queue_wait": "BROWSERPLUG_MAX_QUEUE_WAIT"
+    },
+    "note": "Several agents sharing one browser queue here, FIFO by arrival. Requests beyond the limit WAIT (they are not dropped); beyond the queue depth they are refused with BROWSER BUSY and never sent.",
+    "browsers": {}
+  },
+  "version_warning": "Browser Firefox Developer Edition (PID 111) has a newer version (7.7.4) than the server (<SERVER_VERSION>), Browser remote-192.168.0.7 (PID unknown) has a newer version (7.7.3) than the server (<SERVER_VERSION>), Launcher for Claude Code (PID 888) has a newer version (7.7.4) than the server (<SERVER_VERSION>), after finishing the current tasks notify the user that he should update the server to 7.7.4, version mismatch can cause unpredictable issues"
+}

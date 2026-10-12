@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BrowserPlug</title>
+  <style>
+    /* Palette: Firefox about:preferences, the same tokens options.html carries. The
+       popup and the options page are one product and should read as one. */
+    :root {
+      --page-bg: #f9f9fb;
+      --card-bg: #ffffff;
+      --text: #15141a;
+      --text-muted: #5b5b66;
+      --border: #d7d7db;
+      --border-strong: #b1b1b9;
+      --accent: #0061e0;
+      --accent-hover: #0250bb;
+      --accent-soft: #d6e6ff;
+      --accent-text: #0061e0;
+      --focus-ring: rgba(0, 97, 224, .45);
+      --shadow: 0 1px 4px rgba(0, 0, 0, .06);
+      --shadow-toast: 0 4px 16px rgba(0, 0, 0, .18);
+      --btn-ghost-bg: #f0f0f4;
+      --btn-ghost-hover: #e0e0e6;
+      --btn-ghost-active: #cfcfd8;
+      --btn-primary-text: #ffffff;
+      --ok: #2ac3a2;
+      --ok-bg: #d9f5ee;
+      --ok-text: #005e52;
+      --err: #e22850;
+      --err-bg: #ffe3e8;
+      --err-text: #8f1d34;
+      --warn: #f0a500;
+      --warn-bg: #fff4d6;
+      --warn-text: #7a5a00;
+      --pill-neutral-bg: #ededf0;
+      --pill-neutral-text: #5b5b66;
+      --browser-accent: #e55b13;
+      --remote: #7c3aed;
+      --mono: ui-monospace, "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page-bg: #1c1b22;
+        --card-bg: #2b2a33;
+        --text: #fbfbfe;
+        --text-muted: #bfbfc9;
+        --border: #52525e;
+        --border-strong: #6a6a76;
+        --accent: #4dc4ff;
+        --accent-hover: #74d1ff;
+        --accent-soft: #2b3a52;
+        --accent-text: #80c8ff;
+        --focus-ring: rgba(128, 200, 255, .5);
+        --shadow: 0 1px 4px rgba(0, 0, 0, .35);
+        --shadow-toast: 0 4px 16px rgba(0, 0, 0, .5);
+        --btn-ghost-bg: #38373f;
+        --btn-ghost-hover: #45444d;
+        --btn-ghost-active: #52525e;
+        --btn-primary-text: #15141a;
+        --ok: #54ffbd;
+        --ok-bg: #123a33;
+        --ok-text: #7bf5d3;
+        --err: #ff5b7a;
+        --err-bg: #4a1622;
+        --err-text: #ffb3c1;
+        --warn: #ffc24d;
+        --warn-bg: #4a3d12;
+        --warn-text: #ffe08a;
+        --pill-neutral-bg: #3a3944;
+        --pill-neutral-text: #bfbfc9;
+        --browser-accent: #ff9456;
+        --remote: #c4a1ff;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      width: 360px;
+      margin: 0;
+      padding: 0;
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: system-ui, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    /* Firefox for Android renders this as a full-screen overlay, where a fixed 360px
+       body sits stranded in one corner, and desktop type at phone pixel density is
+       small enough to need pinching. Full width, everything half again as big.
+       `zoom` rather than `transform: scale()`: transform would leave the layout at the
+       old size and let the content overflow the viewport it is supposed to fill.
+       Applied from a class set at runtime (see popup.js): this file is shared with the
+       chromium tree, so a media query on width alone would catch a narrow desktop
+       window too. */
+    body.mobile {
+      width: auto;
+      zoom: 1.5;
+    }
+
+    .pp { display: flex; flex-direction: column; min-height: 420px; }
+
+    /* ---- Brand row ---- */
+    .pp-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; }
+    .pp-logo { width: 24px; height: 24px; flex: none; object-fit: contain; }
+    .pp-titles { flex: 1; min-width: 0; }
+    .pp-name { font-size: 15px; font-weight: 700; line-height: 1.2; }
+    /* The connection state, visible on every tab: switching to Usage must not hide a
+       disconnect. Painted by renderConnection alongside the strip. */
+    .pp-version { font-size: 11.5px; color: var(--text-muted); }
+
+    /* ---- Tab strip: options.html's .nav-item, laid out in a row (its own narrow-window
+       rule does exactly this). ---- */
+    .tabs { display: flex; gap: 4px; padding: 0 10px 8px; border-bottom: 1px solid var(--border); margin: 0 0 12px; }
+    .tab {
+      display: flex; align-items: center; gap: 7px; padding: 6px 11px;
+      border: none; border-radius: 6px; background: transparent; color: var(--text);
+      font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+    }
+    .tab svg { width: 15px; height: 15px; color: var(--text-muted); flex: none; }
+    .tab:hover { background: var(--btn-ghost-bg); }
+    .tab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+    .tab[aria-selected="true"] svg { color: var(--accent-text); }
+    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .tab .badge { font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--pill-neutral-bg); color: var(--pill-neutral-text); }
+    .tab[aria-selected="true"] .badge { background: var(--accent-text); color: var(--card-bg); }
+    /* .tab sets display:flex, which outranks the UA sheet's [hidden] rule — without
+       this a tab taken off the strip (PopupTabs.setVisible) stays on screen. */
+    .tab[hidden] { display: none; }
+    .tabs .spacer { flex: 1; }
+    .icon-btn {
+      width: 28px; height: 28px; border-radius: 6px; border: none; background: transparent;
+      color: var(--text-muted); cursor: pointer; display: grid; place-items: center; align-self: center;
+    }
+    .icon-btn:hover { background: var(--btn-ghost-bg); color: var(--text); }
+    .icon-btn svg { width: 16px; height: 16px; }
+
+    .pane { padding: 0 12px 12px; flex: 1; }
+    .pane[hidden] { display: none; }
+
+    /* ---- Status strip: the options page's status pill, stretched to a row. The tone
+       (ok / warn / bad) is the toolbar badge's colour, so the two cannot disagree. ---- */
+    .pp-status {
+      display: flex; align-items: center; gap: 9px; padding: 8px 10px 8px 12px;
+      border-radius: 8px; margin-bottom: 12px;
+      background: var(--pill-neutral-bg); color: var(--pill-neutral-text);
+    }
+    .pp-status.ok { background: var(--ok-bg); color: var(--ok-text); }
+    .pp-status.bad { background: var(--err-bg); color: var(--err-text); }
+    .pp-status.warn { background: var(--warn-bg); color: var(--warn-text); }
+    .status { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; font-weight: 600; }
+    .status .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: none; }
+    .status .msg { min-width: 0; overflow-wrap: anywhere; }
+    .status .msg::first-letter { text-transform: uppercase; }
+    .status .msg a { color: inherit; text-decoration: underline; cursor: pointer; }
+
+    /* ---- Cards ---- */
+    .card {
+      background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: var(--shadow); padding: 10px 12px; margin-bottom: 12px;
+    }
+    .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .card-head svg { width: 16px; height: 16px; flex: none; color: var(--text); }
+    .card-head h2 { margin: 0; font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; }
+    .card-desc { margin: 0 0 8px; color: var(--text-muted); font-size: 12px; }
+    code { font-family: var(--mono); background: var(--btn-ghost-bg); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+
+    /* ---- Buttons: options.html's button.btn ---- */
+    .btn {
+      font: inherit; font-weight: 600; font-size: 12px; padding: 5px 11px;
+      border-radius: 6px; border: 1px solid transparent; cursor: pointer;
+      transition: background .1s;
+    }
+    .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+    .btn-ghost { background: var(--btn-ghost-bg); color: var(--text); }
+    .btn-ghost:hover { background: var(--btn-ghost-hover); }
+    .btn-ghost:active { background: var(--btn-ghost-active); }
+    .btn-primary { background: var(--accent); color: var(--btn-primary-text); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-sm { font-size: 11.5px; padding: 3px 9px; }
+    .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+    .btn-row[hidden] { display: none; }
+
+    /* ---- Connections ---- */
+    /* Firefox caps the browserAction popup height (~600px). A long list (many clients,
+       or one expanded row with a big command history) would push the footer off the
+       bottom instead of scrolling, so the list scrolls internally past this bound. */
+    #connList {
+      list-style: none; margin: 0; padding: 0;
+      max-height: 400px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    /* None of that applies on Android, where this document IS the full-screen overlay:
+       there is no popup cap to work around, and the overlay scrolls as one page.
+       Release BOTH axes together: CSS computes a `visible` axis to `auto` while the
+       other axis is not visible, so clearing overflow-y alone would leave the scroll
+       container exactly where it was. */
+    body.mobile #connList {
+      max-height: none;
+      overflow: visible;
+    }
+    .conn-row { border-bottom: 1px solid var(--border); }
+    .conn-row:last-child { border-bottom: none; }
+    .conn-head { display: flex; align-items: flex-start; gap: 9px; padding: 6px 4px; border-radius: 6px; }
+    .conn-row.clickable .conn-head { cursor: pointer; }
+    .conn-row.clickable .conn-head:hover { background: var(--btn-ghost-bg); }
+    .conn-ic { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--text-muted); }
+    /* A browser row wears its SLOT on the glyph: the number is what browsers(target=N)
+       takes, and the glyph behind it dims to the role of a backdrop. The halo is the
+       card ground punched through the strokes, so the digit reads over the meridians. */
+    .conn-idwrap { position: relative; width: 16px; height: 16px; flex: none; margin-top: 2px; }
+    .conn-idwrap .conn-ic { margin-top: 0; opacity: .34; }
+    .conn-slot { position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; font-size: 9px; font-weight: 700; line-height: 1;
+      font-variant-numeric: tabular-nums; letter-spacing: -.2px;
+      text-shadow: 0 0 2px var(--card-bg), 0 0 2px var(--card-bg), 0 0 3px var(--card-bg); }
+    .conn-row.extension .conn-slot { color: var(--browser-accent); }
+    .conn-row.remote .conn-slot { color: var(--remote); }
+    .conn-row.server .conn-ic { color: var(--accent-text); }
+    .conn-row.extension .conn-ic { color: var(--browser-accent); }
+    .conn-row.remote .conn-ic { color: var(--remote); }
+    .conn-main { flex: 1; min-width: 0; }
+    .conn-name { font-weight: 500; overflow-wrap: anywhere; cursor: help; }
+    .conn-row.server .conn-name { font-weight: 700; }
+    .conn-detail { font-size: 11px; color: var(--text-muted); margin-top: 1px; overflow-wrap: anywhere; }
+    .conn-detail .since { cursor: help; }
+    .conn-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+    .activity { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; cursor: help; }
+    .conn-pid { font-size: 10px; color: var(--text-muted); opacity: .75;
+      font-variant-numeric: tabular-nums; cursor: help; }
+    .chev { width: 14px; height: 14px; color: var(--text-muted); transition: transform .12s; }
+    .conn-row[aria-expanded="true"] .chev { transform: rotate(90deg); }
+    .conn-empty { color: var(--text-muted); padding: 8px 4px; font-size: 12.5px; }
+    .conn-na { color: var(--warn-text); cursor: help; }
+
+    /* Sessions under an expanded client row: the left rule, now on the token border. */
+    .sessions { margin: 0 4px 6px 29px; padding-left: 8px; border-left: 2px solid var(--border); font-size: 11px; }
+    .sess-h { color: var(--text-muted); margin-top: 4px; }
+    .sess-none { color: var(--text-muted); margin-left: 6px; }
+    .cmd { margin-left: 6px; line-height: 1.5; }
+    .cmd .t { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .cmd .tool { font-family: var(--mono); font-size: 10.5px; color: var(--text); }
+    .cmd .p { color: var(--accent-text); }
+
+    /* ---- Permissions ---- */
+    .state { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; flex: none; }
+    .state.granted { background: var(--ok-bg); color: var(--ok-text); }
+    .state.denied { background: var(--pill-neutral-bg); color: var(--pill-neutral-text); }
+    .state.unknown { background: var(--warn-bg); color: var(--warn-text); }
+    .perm-body { font-size: 12px; color: var(--text-muted); }
+    .perm-body p { margin: 6px 0; }
+    .perm-body p[hidden] { display: none; }
+    .perm-body .risk { background: var(--warn-bg); color: var(--warn-text); border-radius: 6px; padding: 6px 9px; }
+    .perm-body .risk code { background: rgba(0, 0, 0, .08); color: inherit; }
+    .perm-body a { color: var(--accent-text); }
+    /* about:addons rendered as plain text when there's no tab to switch to */
+    .perm-body a.as-text { color: inherit; text-decoration: none; cursor: default; }
+
+    /* ---- Usage ---- */
+    .meter { margin: 6px 0; }
+    .meter .lbl { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-muted); margin-bottom: 3px; }
+    .meter .lbl b { color: var(--text); font-weight: 600; }
+    .meter .track { height: 8px; border-radius: 4px; background: var(--btn-ghost-bg); overflow: hidden; }
+    .meter .fill { height: 100%; border-radius: 4px; background: var(--accent); }
+    .meter .fill.hot { background: var(--err); }
+    .meter .fill.peak { background: #e67e22; }
+    .usage-note { font-size: 12px; color: var(--text-muted); margin: 4px 0 0; }
+    .usage-note a { color: var(--accent-text); }
+    .usage-chart { margin-top: 8px; }
+
+    /* ---- Footer: the ws:// the background is actually dialing (its live CONFIG, via
+       the getConnectionStatus reply; storage is only a fallback), plus a flag when a
+       test override is in effect. The status strip embeds the same URL in
+       phase-specific prose and drops it if that read fails; this states the target
+       plainly, in one stable place, whatever the phase. ---- */
+    .info {
+      margin-top: auto; padding: 4px 14px 10px;
+      font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+      overflow-wrap: anywhere;
+    }
+    .info .test-config { font-size: 10px; color: var(--accent-text); margin-top: 2px; }
+
+    /* ---- Right-click menu for connection rows (Copy connection info / Copy PID) ---- */
+    .ctx-menu {
+      position: fixed;
+      z-index: 1000;
+      min-width: 170px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: var(--shadow-toast);
+      padding: 4px;
+      font-size: 12.5px;
+      user-select: none;
+    }
+    .ctx-menu-item { padding: 6px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+    .ctx-menu-item:hover { background: var(--btn-ghost-bg); }
+    .ctx-menu-item.disabled { color: var(--text-muted); cursor: default; }
+    .ctx-menu-item.disabled:hover { background: transparent; }
+
+    /* Press-and-hold opens the SAME menu centred over a backdrop instead of pinned to a
+       pointer. A hold has no useful anchor: on a phone your finger is covering the spot,
+       and there is no right-click there at all, which left "Copy connection info"
+       unreachable. Bigger hit targets because it is reached by thumb. */
+    .ctx-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 999; }
+    .ctx-menu.as-modal {
+      left: 50%; top: 50%; transform: translate(-50%, -50%);
+      min-width: 210px; max-width: calc(100vw - 32px);
+    }
+    .ctx-menu.as-modal .ctx-menu-item { padding: 12px 16px; font-size: 14px; white-space: normal; }
+    /* A hold that is about to open the menu must not also start a text selection or the
+       browser's own long-press handler. */
+    #connList li.holding { user-select: none; -webkit-user-select: none; background: var(--btn-ghost-bg); }
+  </style>
+</head>
+<body>
+<div class="pp">
+  <div class="pp-head">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="../icons/app/logo-dark.png">
+      <img class="pp-logo" src="../icons/app/logo-light.png" alt="" aria-hidden="true">
+    </picture>
+    <div class="pp-titles">
+      <div class="pp-name">BrowserPlug</div>
+      <div class="pp-version" id="extVersion"></div>
+    </div>
+  </div>
+
+  <div class="tabs" role="tablist" id="popupTabs" aria-label="Popup sections">
+    <button type="button" class="tab" role="tab" data-tab="status" id="tab-status" aria-selected="true" aria-controls="pane-status">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Status <span class="badge" id="connCount">0</span>
+    </button>
+    <button type="button" class="tab" role="tab" data-tab="permissions" id="tab-permissions" aria-selected="false" aria-controls="pane-permissions" tabindex="-1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      Permissions
+    </button>
+    <button type="button" class="tab" role="tab" data-tab="usage" id="tab-usage" aria-selected="false" aria-controls="pane-usage" tabindex="-1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Usage
+    </button>
+    <span class="spacer"></span>
+    <button type="button" class="icon-btn" id="openOptions" title="Open Options page" aria-label="Open Options page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+
+  <!-- ---------- Status ---------- -->
+  <section class="pane" id="pane-status" data-pane="status" role="tabpanel" aria-labelledby="tab-status">
+    <!-- The strip mirrors the toolbar button: colour for the verdict, tooltip for the
+         words (renderConnection in popup.js). The Stop/Reconnect button is the only
+         phase-dependent control. -->
+    <div class="pp-status" id="statusStrip">
+      <div id="status" class="status"><span class="dot"></span><span class="msg">…</span></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="connAction">Reconnect</button>
+    </div>
+
+    <!-- Server + every connected browser + every MCP client, one row each. Several
+         browsers connected at once is a SUPPORTED state (each gets its own row,
+         labelled "[slot] Firefox — profile" by the server), not a conflict; there is
+         deliberately no "multiple instances are fighting over the slot" warning here.
+         card-head is intentionally omitted. -->
+    <div class="card">
+      <ul id="connList"></ul>
+    </div>
+  </section>
+
+  <!-- ---------- Permissions ---------- -->
+  <section class="pane" id="pane-permissions" data-pane="permissions" role="tabpanel" aria-labelledby="tab-permissions" hidden>
+    <div class="card file-access">
+      <div class="card-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <h2>Local file (<code>file://</code>) reading</h2>
+        <span id="fileAccessIndicator" class="state unknown">…</span>
+      </div>
+      <div id="fileAccessText" class="card-desc">Checking…</div>
+      <div id="fileAccessDetails" class="perm-body">
+        <p id="fileAccessDesktopHow">The browser doesn't let an extension <em>open</em> a <code>file://</code> URL itself. To work with a local file, <strong>you</strong> open it (paste <code>file:///…</code> in the address bar, or Ctrl+O). BrowserPlug can then read that tab.</p>
+        <p id="fileAccessMobileWhy" hidden>Firefox for Android cannot open <code>file://</code> <strong>at all</strong>, not just for extensions. Typing <code>file:///</code> in its address bar does nothing; the capability was dropped in the Fenix rewrite and has not come back (Bugzilla 1806171, open since 2022). So there is no tab for BrowserPlug to read and nothing to turn on: the desktop permission lives in <code>about:addons</code> ▸ Permissions, a page Firefox for Android does not have either. There is no workaround on the phone; use a desktop browser for local files.</p>
+        <p class="risk"><strong>Risk:</strong> while reading is enabled, any MCP client connected to BrowserPlug can read the contents of local files you open (and a page opened from <code>file://</code> can reach other local files).</p>
+        <p id="fileAccessEnableHelp" hidden>To enable reading: open <a href="#" id="openAddons"><code>about:addons</code></a> ▸ BrowserPlug ▸ Permissions and turn on <strong>“Access local files on your computer”</strong> (Firefox 153+), then Re-check.</p>
+        <p id="fileAccessChromiumHelp" hidden>To enable reading: go to <a href="#" id="openExtensionPageFiles">the extensions page</a>, turn on <strong>Allow access to file URLs</strong>, then Re-check.</p>
+        <div class="btn-row"><button type="button" class="btn btn-ghost btn-sm" id="fileAccessRecheck">Re-check</button></div>
+      </div>
+    </div>
+    <div class="card proxy-access">
+      <div class="card-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <h2>SOCKS proxy routing (.onion / Tor)</h2>
+        <span id="proxyAccessIndicator" class="state unknown">…</span>
+      </div>
+      <div id="proxyAccessText" class="card-desc">Checking…</div>
+      <div id="proxyAccessDetails" class="perm-body">
+        <p>Lets BrowserPlug route a tab's traffic, <em>including DNS</em>, through a SOCKS proxy you specify (e.g. <code>socks5://127.0.0.1:9050</code>) instead of a direct connection. Because names are resolved <strong>at the proxy</strong>, the notable use case is opening <strong>Tor <code>.onion</code></strong> hidden services through a Tor SOCKS5 proxy, with no local DNS leak. Routing is fail-closed: if the proxy is unreachable the tab errors instead of falling back to a direct connection.</p>
+        <p><strong>Supported:</strong> SOCKS5 (<code>socks5://</code>, <code>socks5h://</code>) and SOCKS4 (<code>socks4://</code>, <code>socks4a://</code>) proxies, given as <code>host:port</code>.<br><strong>Not supported:</strong> HTTP/HTTPS proxies, PAC / auto-config scripts, proxies that require a username/password, and your operating system's own proxy settings.</p>
+        <p class="risk"><strong>Risk:</strong> while enabled, any MCP client connected to BrowserPlug can route your browsing (including pages you're logged into) through any SOCKS proxy it names.</p>
+        <p id="proxyAccessChromiumScope" class="risk" hidden><strong>Chrome, Edge and Brave:</strong> these browsers cannot route a single tab, so a request that names a proxy switches the <strong>entire browser</strong>, every tab including the ones you are using, until the agent switches it off. BrowserPlug also switches it off by itself when it loses its connection to the server or the browser restarts, and the agent is told each time it happens.</p>
+        <p id="proxyAccessChromiumHelp" hidden>Chrome cannot ask for this as an optional permission, so this switch is your consent: while it is off, BrowserPlug refuses every proxy request. Press <strong>Allow the browser-wide proxy</strong> below to turn it on, and the same button turns it off again (which also ends a proxy that is running).</p>
+        <p id="proxyAccessEnableHelp" hidden>To enable routing: open <a href="#" id="openAddonsProxy"><code>about:addons</code></a> ▸ BrowserPlug ▸ Permissions and turn on <strong>“Control browser proxy settings”</strong>, then Re-check.</p>
+        <p id="proxyAccessMobileHelp" hidden>Routing itself works on Android; it is the <em>granting</em> that differs. There is no <code>about:addons</code> to flip a toggle in, so ask Firefox for the permission directly with the button below; it must be a real tap, because Firefox only accepts the request from one.</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary btn-sm" id="proxyAccessGrant" hidden>Grant proxy permission</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="proxyAccessRecheck">Re-check</button>
+        </div>
+      </div>
+    </div>
+    <!-- Chromium only: popup.js unhides it. Firefox has no such switch. -->
+    <div class="card user-scripts" id="userScriptsCard" hidden>
+      <div class="card-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <h2>Allow user scripts (<code>page_eval</code>)</h2>
+        <span id="userScriptsIndicator" class="state unknown">…</span>
+      </div>
+      <div id="userScriptsText" class="card-desc">Checking…</div>
+      <div id="userScriptsDetails" class="perm-body">
+        <p>Running JavaScript in a page (<code>page_eval</code>, and wait conditions that evaluate an expression) goes through Chrome's User Scripts API, which stays locked until you turn on <strong>Allow user scripts</strong> for this extension. Only you can turn it on; the extension cannot. Every other tool works without it.</p>
+        <p class="risk"><strong>Risk:</strong> while it is on, any MCP client connected to BrowserPlug can run any JavaScript in the pages you have open, including the ones you are logged into.</p>
+        <p id="userScriptsEnableHelp" hidden>To enable it: go to <a href="#" id="openExtensionPage">the extensions page</a>, turn on <strong>Allow user scripts</strong>, then Re-check.</p>
+        <div class="btn-row"><button type="button" class="btn btn-ghost btn-sm" id="userScriptsRecheck">Re-check</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------- Usage ---------- -->
+  <!-- One card per provider, rendered by popup/usage-pane.js from the same view modules
+       that draw the bars on the client rows. -->
+  <section class="pane" id="pane-usage" data-pane="usage" role="tabpanel" aria-labelledby="tab-usage" hidden>
+    <div id="usagePane"></div>
+  </section>
+
+  <div id="serverInfo" class="info"></div>
+</div>
+
+  <script src="../vendor/usage-chart.js"></script>
+  <script src="../vendor/anthropic-view.js"></script>
+  <script src="../vendor/kilocode-view.js"></script>
+  <script src="../vendor/deepseek-view.js"></script>
+  <script src="../vendor/openai-view.js"></script>
+  <script src="../vendor/copilot-view.js"></script>
+  <!-- The tab strip and the Usage pane each self-register on globalThis; popup.js
+       calls them and carries on without them if either is missing. -->
+  <script src="popup-tabs.js"></script>
+  <script src="usage-pane.js"></script>
+  <!-- Chromium-only helpers; popup.js never calls them on Firefox. -->
+  <script src="chromium-access.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
