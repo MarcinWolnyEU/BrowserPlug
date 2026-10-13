@@ -864,7 +864,8 @@ def test_a_hand_over_stuck_in_the_kernel_is_abandoned_at_its_deadline():
         dog._exit_process()
         elapsed = time.monotonic() - t0
         assert events == ["handover started", "exit"]
-        assert BOUNDED.handover_wait <= elapsed < BOUNDED.handover_wait + 2
+        # A timed wait can return a few ms before time.monotonic() agrees (Windows timer ticks).
+        assert BOUNDED.handover_wait - 0.05 <= elapsed < BOUNDED.handover_wait + 2
     finally:
         release.set()
 
