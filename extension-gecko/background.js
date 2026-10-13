@@ -2202,7 +2202,7 @@ if (browser.permissions && browser.permissions.onRemoved) {
 
 function isPrivilegedUrl(url) {
   return !url || /^(about|chrome|moz-extension|resource|view-source|jar|data|javascript):/.test(url) ||
-    url.startsWith('https://addons.mozilla.org');
+    url.startsWith('https://addons.mozilla.org/');
 }
 
 // Resolve the target tab for a request: default to the active tab when no

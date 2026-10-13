@@ -181,7 +181,7 @@ test('OpenAI: the window names come from the payload; a failed read links to cha
     c = cardTitled(host, 'OpenAI');
     assert.equal(pill(c).textContent, 'unavailable');
     const a = c.querySelector('a');
-    assert.ok(a && a.href.startsWith('https://chatgpt.com'), 'the fix is a sign-in, so the card links to it');
+    assert.ok(a && new URL(a.href).hostname === 'chatgpt.com', 'the fix is a sign-in, so the card links to it');
 
     render({ openai: { mode: 'client', opts: {}, usage: {
       ok: true, limitReached: true, reachedType: 'primary_window',

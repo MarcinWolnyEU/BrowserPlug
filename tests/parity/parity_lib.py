@@ -178,12 +178,12 @@ _EXT_READ_RE = re.compile(
 )
 
 # A string literal that stops at its own matching (possibly different type) quote.
-_STR = r"(['\"])((?:\\.|(?!\2).)*)\2"
+_STR = r"(['\"])((?:\\.|(?!\2)[^\\\n])*)\2"
 # receiver.indexOf('literal' ...) — group1 receiver, group3 literal content.
 _INDEXOF_RE = re.compile(r"(\w+)\.indexOf\(\s*" + _STR)
 # A bare slice('start', 'end', ...) helper call (not `.slice(`): first TWO string args.
 _SLICE_RE = re.compile(
-    r"(?<![.\w])slice\(\s*(['\"])((?:\\.|(?!\1).)*)\1\s*,\s*(['\"])((?:\\.|(?!\3).)*)\3"
+    r"(?<![.\w])slice\(\s*(['\"])((?:\\.|(?!\1)[^\\\n])*)\1\s*,\s*(['\"])((?:\\.|(?!\3)[^\\\n])*)\3"
 )
 
 

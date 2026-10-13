@@ -532,7 +532,7 @@ PRAGMA user_version = 2;
     def _extract_profile(self, compressed_path, target_dir):
         """Extract compressed profile to target directory"""
         with tarfile.open(compressed_path, 'r:gz') as tar:
-            tar.extractall(target_dir)
+            tar.extractall(target_dir, filter="data")
 
     def _compress_profile(self, profile_dir, output_path):
         """Compress profile directory to .tar.gz file"""

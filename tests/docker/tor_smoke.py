@@ -61,7 +61,9 @@ def socks_fetch(endpoint, host, path, tls, timeout=60):
         raise OSError(f"SOCKS5 connect failed, reply {head!r}")
     sock.recv({1: 6, 4: 18}.get(head[3], 6))
     if tls:
-        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        sock = context.wrap_socket(sock, server_hostname=host)
     sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
     chunks = []
     while True:

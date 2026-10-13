@@ -53,7 +53,7 @@ test('the common connectivity failures each map to a DISTINCT cause an agent can
   const outputs = Object.entries(cases).map(([code, rx]) => {
     const out = humanizeNetError(code);
     assert.match(out, rx, code);
-    assert.match(out, new RegExp('\\[' + code.replace(/[:]/g, '\\$&') + '\\]'), `${code} keeps its code`);
+    assert.match(out, new RegExp('\\[' + code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\]'), `${code} keeps its code`);
     return out;
   });
   assert.equal(new Set(outputs).size, outputs.length, 'each failure reads distinctly');

@@ -742,7 +742,8 @@ test('isPrivilegedUrl flags the chromium privileged schemes and the web store, p
                    'https://chrome.google.com/webstore/detail/foo', '']) {
     assert.equal(isPrivilegedUrl(u), true, `${u} must be privileged`);
   }
-  for (const u of ['https://example.com/', 'http://localhost:3000/', 'https://x.test/a?b#c']) {
+  for (const u of ['https://example.com/', 'http://localhost:3000/', 'https://x.test/a?b#c',
+                   'https://chromewebstore.google.com.lookalike.test/']) {
     assert.equal(isPrivilegedUrl(u), false, `${u} must be reachable`);
   }
 });

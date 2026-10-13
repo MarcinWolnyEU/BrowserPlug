@@ -724,7 +724,7 @@ def test_the_token_file_is_CREATED_owner_only_never_widened_afterwards(tmp_path)
     real_open = os.open
     modes = []
 
-    def spy(file, flags, mode=0o777, **kw):
+    def spy(file, flags, mode=0o600, **kw):
         if str(file) == str(path):
             modes.append(mode)
         return real_open(file, flags, mode, **kw)

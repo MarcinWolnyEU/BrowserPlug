@@ -2037,7 +2037,7 @@ async function applyProxyField(id, raw) {
 function isPrivilegedUrl(url) {
   return !url ||
     /^(about|chrome|edge|devtools|chrome-extension|view-source|data|javascript):/.test(url) ||
-    url.startsWith('https://chromewebstore.google.com') ||
+    url.startsWith('https://chromewebstore.google.com/') ||
     url.startsWith('https://chrome.google.com/webstore');
 }
 
