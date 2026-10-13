@@ -120,10 +120,8 @@ class _QuietHTTPHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(payload_bytes)
 
     def _redirect(self, location, status=302):
-        # The target can come from the request (/offsite?to=), so refuse header injection.
-        if "\r" in location or "\n" in location:
-            self.send_error(400, "line break in redirect target")
-            return
+        # The target can come from the request (/offsite?to=), so a line break is encoded, not sent.
+        location = location.replace("\r", "%0D").replace("\n", "%0A")
         self.send_response(status)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
