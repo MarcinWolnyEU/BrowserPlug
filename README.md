@@ -4,7 +4,7 @@
 
 The be-all-end-all MCP for your browser. BrowserPlug uses less of your context window, less memory and better performance while retaining key capabilities. Built over a span of 4 months, tested on real projects, hardened by multiple models and harnesses.
 
-<!-- DEMO VIDEO: drag .tmp/brag-output/brag.mp4 into GitHub's editor and paste the user-attachments URL on this line -->
+https://github.com/user-attachments/assets/9fb5fd8d-544e-4fa6-9b7a-63190c4be59d
 
 [![CI](https://github.com/MarcinWolnyEU/browserplug/actions/workflows/ci.yml/badge.svg)](https://github.com/MarcinWolnyEU/browserplug/actions/workflows/ci.yml)
 [![Security](https://github.com/MarcinWolnyEU/browserplug/actions/workflows/security.yml/badge.svg)](https://github.com/MarcinWolnyEU/browserplug/actions/workflows/security.yml)
