@@ -23,7 +23,6 @@ from server.web import host_guard, mcp_host_origin
 from server.server import BrowserPlugServer
 
 EVIL = "rebind.attacker.example:2830"
-PEER = ("127.0.0.1", 50000)
 MCP_HEADERS = {"content-type": "application/json",
                "accept": "application/json, text/event-stream"}
 
@@ -32,6 +31,11 @@ def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+# A port nothing holds. The owner gate maps the peer port to a process, so a made-up
+# constant can land on a socket another account owns (a hosted CI runner does).
+PEER = ("127.0.0.1", _free_port())
 
 
 def _server():

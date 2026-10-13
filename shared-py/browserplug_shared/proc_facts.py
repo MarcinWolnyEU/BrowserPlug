@@ -472,7 +472,9 @@ def parse_proc_net_tcp(text):
             words = [raw[i:i + 4] for i in range(0, len(raw), 4)]
             # Each 32-bit word is printed in the host's byte order.
             ordered = b"".join(w[::-1] if sys.byteorder == "little" else w for w in words)
-            address = str(ipaddress.ip_address(ordered))
+            ip = ipaddress.ip_address(ordered)
+            # Some 3.12 patch releases print a mapped IPv4 as ::ffff:7f00:1; callers match the dotted form.
+            address = f"::ffff:{ip.ipv4_mapped}" if ip.version == 6 and ip.ipv4_mapped else str(ip)
             rows.append((address, int(port_hex, 16), int(fields[9])))
         except ValueError:
             continue
