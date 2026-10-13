@@ -32,7 +32,11 @@ _KIND_KEYS = ("action", "type", "kind")
 #: Longest path shown; a long path is more likely an embedded token than a page name.
 _PATH_LIMIT = 80
 _ENUM_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,40}$")
-_PLACEHOLDER_RE = re.compile(r"^<(?:[a-z0-9 ]+: [^<>]{1,300}|number)>$")
+# The body is long enough for the longest placeholder redact_value builds (20 dict keys of 30
+# characters, or 20 item kinds of 40), so redacting a redacted value returns it unchanged.
+_PLACEHOLDER_RE = re.compile(r"^<(?:[a-z0-9 ]+: [^<>]{1,1000}|number)>$")
+# A dict key is shown inside a placeholder; an angle bracket would end it early.
+_ANGLE_RE = re.compile(r"[<>]")
 _URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://\S+$")
 _URL_IN_TEXT_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 
@@ -93,7 +97,7 @@ def redact_value(key, v):
         return f"<list: {len(v)} items>"
     if isinstance(v, dict):
         return "<object: keys " + ", ".join(
-            str(k)[:30] for k in list(v)[:20]) + ">"
+            _ANGLE_RE.sub("?", str(k)[:30]) for k in list(v)[:20]) + ">"
     return f"<{type(v).__name__}>"
 
 

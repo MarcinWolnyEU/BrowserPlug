@@ -175,7 +175,10 @@ class HostGuard:
     def origin_allowed(self, origin: str, may_block: bool = True) -> bool:
         if origin.strip().lower() == "null":
             return False
-        parts = urlsplit(origin)
+        try:
+            parts = urlsplit(origin)
+        except ValueError:   # "http://[" and kin: an Origin no browser sends
+            return False
         if parts.scheme not in ("http", "https") or not parts.netloc:
             return False
         return self.host_allowed(parts.netloc, may_block)

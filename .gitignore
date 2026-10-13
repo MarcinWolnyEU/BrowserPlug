@@ -15,6 +15,7 @@ dist/
 # Testing
 .coverage
 .pytest_cache/
+.hypothesis/
 .ruff_cache/
 coverage.xml
 ## Test import symbolic links (tests/test_imports.py says how to create them)

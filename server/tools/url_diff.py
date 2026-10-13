@@ -38,7 +38,7 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import SplitResult, parse_qsl, quote, urlsplit
 
 from server.tools.url_norm import ascii_host, resolve_dot_segments
 
@@ -404,14 +404,23 @@ def is_auth_location(path: str) -> bool:
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:(?!\d+(?:/|$))")
 
 
+def _safe_urlsplit(text: str):
+    """urlsplit, but a string it refuses (`[` or `http://[::1`: an unbalanced IPv6 bracket)
+    is read as an opaque path instead of raising, so a malformed URL is still compared."""
+    try:
+        return urlsplit(text)
+    except ValueError:
+        return SplitResult("", "", text, "", "")
+
+
 def _split(url: Optional[str]):
     """urlsplit, except that a scheme-less `example.org/docs` (what an agent often types,
     and what the browser completes to https) is read as a host, not as a path."""
     text = (url or "").strip()
     if text and "://" not in text and not text.startswith(("/", "#", "?")) \
             and not _SCHEME_RE.match(text):
-        return urlsplit("//" + text)
-    return urlsplit(text)
+        return _safe_urlsplit("//" + text)
+    return _safe_urlsplit(text)
 
 
 # ---- the comparison ------------------------------------------------------------------
@@ -516,7 +525,7 @@ def interstitial_evidence(url: Optional[str], title: Optional[str] = None,
     is the actual finding (a dropped `stan=uzywane` filter). So callers treat a status-only
     signal as an annotation, never as a reason to stop describing what else changed.
     """
-    parts = urlsplit(url or "")
+    parts = _safe_urlsplit(url or "")
     host = (parts.netloc or "").lower()
     path = (parts.path or "").lower()
     for marker, label in INTERSTITIAL_HOST_MARKERS:
