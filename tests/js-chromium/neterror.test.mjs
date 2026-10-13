@@ -72,6 +72,9 @@ test('the SOCKS/proxy failure codes are mapped — the ones a would-be proxy use
 test('an unmapped net::ERR_* code passes through unchanged (nothing is swallowed)', () => {
   const { humanizeNetError } = loadNetErrorHelpers();
   assert.equal(humanizeNetError('net::ERR_SOMETHING_BRAND_NEW'), 'net::ERR_SOMETHING_BRAND_NEW');
+  for (const inherited of ['toString', 'constructor', '__proto__']) {
+    assert.equal(humanizeNetError(inherited), inherited); // not an Object.prototype member
+  }
 });
 
 test('empty / null input is null; a non-net string passes through unchanged', () => {

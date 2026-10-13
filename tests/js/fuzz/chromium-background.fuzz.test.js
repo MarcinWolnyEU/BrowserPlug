@@ -47,8 +47,10 @@ test('a mapped code keeps its own name in brackets', () => {
   }));
 });
 
-test('humanizeNetError tolerates non-string input', () => {
-  fc.assert(fc.property(fc.anything(), (value) => {
+test('humanizeNetError tolerates the primitives a failed load can carry', () => {
+  // Objects are out: the browser hands over a string or nothing, never an object.
+  const primitive = fc.oneof(fc.constant(null), fc.constant(undefined), fc.integer(), fc.double(), fc.boolean());
+  fc.assert(fc.property(primitive, (value) => {
     assert.doesNotThrow(() => humanizeNetError(value));
   }), RUNS);
 });

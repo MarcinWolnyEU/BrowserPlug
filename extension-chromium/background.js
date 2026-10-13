@@ -1711,7 +1711,7 @@ const NET_ERROR_HUMAN = {
 function humanizeNetError(code) {
   if (!code) return null;
   const name = String(code);
-  const h = NET_ERROR_HUMAN[name];
+  const h = Object.hasOwn(NET_ERROR_HUMAN, name) ? NET_ERROR_HUMAN[name] : null; // not "toString"
   return h ? (h + ' [' + name + ']') : name;
 }
 

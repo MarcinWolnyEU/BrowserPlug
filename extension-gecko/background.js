@@ -1768,7 +1768,7 @@ function humanizeNetError(code) {
     name = sym;
     raw = m[1];
   }
-  const h = NET_ERROR_HUMAN[name];
+  const h = Object.hasOwn(NET_ERROR_HUMAN, name) ? NET_ERROR_HUMAN[name] : null; // not "toString"
   const label = raw ? (name + ' = ' + raw) : name;
   return h ? (h + ' [' + label + ']') : (raw ? (name + ' [' + raw + ']') : name);
 }

@@ -84,6 +84,10 @@ test('symbolic names keep their human text and name, without a bogus raw int', (
 test('an unknown symbolic name passes through unchanged; empty input is null', () => {
   const { humanizeNetError } = loadNetErrorHelpers();
   assert.equal(humanizeNetError('NS_ERROR_SOMETHING_NEW'), 'NS_ERROR_SOMETHING_NEW');
+  // An inherited Object.prototype name is not a mapped code (found by the fast-check fuzz test).
+  for (const inherited of ['toString', 'constructor', '__proto__']) {
+    assert.equal(humanizeNetError(inherited), inherited);
+  }
   assert.equal(humanizeNetError(''), null);
   assert.equal(humanizeNetError(null), null);
 });
