@@ -23,8 +23,10 @@ Everything else goes where it will be read:
   change to something a user sees or sets updates the guide and the dev doc.
 - Code comments: low-level detail beside the code, stating intent, constraint or trap,
   never narrating the next line.
-- `.tmp/`: dated research and investigation write-ups. History goes there or nowhere, never
-  into `.tmp/dev-docs/`, `docs/` or this file.
+- `.tmp/`: everything else, sorted into `.tmp/docs/` (dated research and investigation
+  write-ups), `.tmp/work/` (scripts, probes, repro and build directories), `.tmp/logs/`
+  and `.tmp/assets/`. History goes in `.tmp/docs/` or nowhere, never into `.tmp/dev-docs/`,
+  `docs/` or this file.
 
 The dev docs (a bare `name.md` in this file means `.tmp/dev-docs/name.md`):
 
@@ -103,7 +105,7 @@ These are the user's standing instructions.
 ### Decisions that stand
 
 Do not re-propose these; the user settled each one. Item codes (S10, T11, A6) are from
-`.tmp/server-launcher-review-2026-09-29-resolution.md`.
+`.tmp/docs/server-launcher-review-2026-09-29-resolution.md`.
 
 - No new tools, and no new parameters where an option on an existing tool will do. The
   surface is nine tools plus a conditional tenth. An addition to a tool description must be
@@ -117,8 +119,8 @@ Do not re-propose these; the user settled each one. Item codes (S10, T11, A6) ar
 - No `extension-common/` source-generation tree: shared files are byte-copied and checked
   by a loud validator.
 - No `page_console`, no `history`, no clipboard read and no `save_to` on `page_screenshot`:
-  a usage census found them unused. Read `.tmp/agent-economy-fx5-17.md` before reinstating
-  any; gecko clipboard mechanics are in `.tmp/clipboard-read-focus-findings.md`.
+  a usage census found them unused. Read `.tmp/docs/agent-economy-fx5-17.md` before reinstating
+  any; gecko clipboard mechanics are in `.tmp/docs/clipboard-read-focus-findings.md`.
 - S10 is closed: no plaintext token auth exists. No peer authenticates over a plaintext
   hello and the HTTP gate ignores the raw token header, so a "require encryption" switch
   would refuse nothing.

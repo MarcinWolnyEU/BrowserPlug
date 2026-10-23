@@ -1,12 +1,12 @@
 """Admission slots and pending-request state across retry, cancel, timeout and disconnect.
 
-Review findings C5 and C6 (.tmp/server-launcher-review-2026-09-29.md):
+Review findings:
 
-  C5  A transient-disconnect retry ran while its parent request still held the browser's
+  -   A transient-disconnect retry ran while its parent request still held the browser's
       admission slot. A displaced socket keeps its gate (only remove() drops it), so with
       BROWSERPLUG_MAX_CONCURRENT_REQUESTS=1 the retry queued behind its own parent until
       the 60 s queue budget ran out.
-  C6  A client cancel raised CancelledError past `except Exception`, leaving the
+  -   A client cancel raised CancelledError past `except Exception`, leaving the
       pending_requests/pending_owners entries behind (every restart then waited out its
       drain budget). A timeout or cancel also released the slot at once although the
       browser was still working, so the gate stopped bounding the extension.

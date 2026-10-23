@@ -85,8 +85,8 @@ What it can reach:
 
 | MCP | Your logged-in session | Chrome | Firefox | Safari | Remote in LAN | Remote external IP | Proxy connections | Content filtering | Collects telemetry |
 |---|---|---|---|---|---|---|---|---|---|
-| BrowserPlug | always | yes, plus Edge and Brave | yes, plus Zen, LibreWolf, Firefox for Android | no | yes: browsers on other LAN machines connect with a device token over an encrypted socket; `/mcp` itself is loopback only | yes, in WAN mode (same socket; the HTTP port has no TLS, a tunnel is advised) | per-tab SOCKS4/5 and Tor, off until you allow it; no HTTP, PAC or authenticated proxies; Chromium switches the whole browser | headers always redacted, body censoring and custom patterns opt-in, output caps; no site allow or block list | none; the usage panels call claude.ai and github.com with your cookies (on by default, each can be switched off) |
-| Playwright MCP | opt-in: `--extension` (Chrome and Edge only) or `--cdp-endpoint` to a Chrome with a debugging port | yes | yes, not your logged-in session | no (its WebKit build is not Safari) | yes: `--cdp-endpoint` or `--endpoint` to any host, no auth or TLS added | same flags, any address | `--proxy-server` (HTTP, SOCKS5); credentials only in the config file | `--allowed-origins` and `--blocked-origins` (documented as not a security boundary), `--secrets` masking, file-system guard | none found |
+| BrowserPlug | always | yes, plus Edge and Brave | yes, plus other Gecko browsers, including Firefox for Android | no | yes: browsers on other LAN machines connect with a device token over an encrypted socket; `/mcp` itself is loopback only | yes, in WAN mode (same socket; the HTTP port has no TLS, a tunnel is advised) | per-tab SOCKS4/5 and Tor, off until you allow it; no HTTP, PAC or authenticated proxies; Chromium switches the whole browser | headers always redacted, body censoring and custom patterns opt-in, output caps; no site allow or block list | none; the usage panels call claude.ai and github.com with your cookies (on by default) and chatgpt.com once you enable its panel; each can be switched off |
+| Playwright MCP | opt-in: `--extension` (Chromium browsers) or `--cdp-endpoint` to a Chrome with a debugging port | yes | yes, not your logged-in session | no (its WebKit build is not Safari) | yes: `--cdp-endpoint` or `--endpoint` to any host, no auth or TLS added | same flags, any address | `--proxy-server` (HTTP, SOCKS5); credentials only in the config file | `--allowed-origins` and `--blocked-origins` (documented as not a security boundary), `--secrets` masking, file-system guard | none found |
 | chrome-devtools-mcp | opt-in: `--autoConnect` (Chrome 144+, you click Allow) or `--browserUrl` / `--wsEndpoint` | yes | no | no | yes: `--browserUrl` / `--wsEndpoint`; the debug port has no auth or TLS, its docs advise an SSH tunnel | same flags, tunnel advised | `--proxyServer`, no auth, only for a Chrome it launches | `--blockedUrlPattern` / `--allowedUrlPattern`, `--no-javascript-evaluation`, `--redactNetworkHeaders` (off by default) | yes: usage statistics to Google by default (`--no-usage-statistics`), CrUX lookups for traces (`--no-performance-crux`) and a daily npm update check |
 | Selenium MCP | no attach route; a real profile passed in `arguments` starts a new browser and fails if the profile is open | yes | yes, not your logged-in session | yes, macOS only | only through `SELENIUM_REMOTE_URL`, undocumented, new session each time | same variable, any address | none in the MCP; Chrome and Edge take `--proxy-server` through `arguments` | none | yes: Selenium Manager posts to plausible.io on every `start_browser` (`SE_AVOID_STATS=true` stops it) |
 
@@ -125,9 +125,9 @@ endpoint answers only local callers. Captured requests show `Cookie`, `Authoriza
 similar headers as `<redacted>`; bodies arrive as sent unless you turn on censoring in Options.
 
 There is no analytics, no account and no BrowserPlug service. The extension's usage panels
-call claude.ai and github.com with your cookies (on by default, each can be switched off), and
-`proxy="tor"` downloads Tor. [PRIVACY.md](PRIVACY.md) lists every host contacted and what is
-stored where.
+call claude.ai and github.com with your cookies (on by default) and chatgpt.com once you turn
+its panel on; each can be switched off. `proxy="tor"` downloads Tor. [PRIVACY.md](PRIVACY.md)
+lists every host contacted and what is stored where.
 
 ## Quick start
 

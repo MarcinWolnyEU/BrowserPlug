@@ -1,7 +1,7 @@
 """Unit tests for server/tools/tool_registry.py: the tool contract, pinned byte for byte.
 
-The expected schemas and texts are the ones clients saw before the SDK migration (see
-.tmp/2026-10-01-mcp-sdk-migration.md); the argument-error texts come from the ORACLE
+The expected schemas and texts are the ones clients saw before the SDK migration;
+the argument-error texts come from the ORACLE
 corpus. pydantic writes its docs URL into every validation error, with its
 own major.minor in the path, so that one segment is derived from the installed pydantic.
 """

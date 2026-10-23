@@ -6,9 +6,10 @@ the Chrome Web Store are in review, so for now every install is from source.
 
 ## Prerequisites
 
-- Python 3.11 or 3.12 for the server (its dependency block asks for `>=3.11,<3.13`; 3.13 and
-  later are untested). The launcher, `control.py`, `build_xpi.py` and `gen_ws_token.py` use
-  only the standard library and run on 3.10 or later, `preflight.py` on 3.9 or later.
+- Python 3.11 or 3.12 for the server (its dependency block asks for `>=3.11,<3.13`). 3.13 and
+  later are not supported yet. The launcher, `control.py`, `build_xpi.py` and
+  `gen_ws_token.py` use only the standard library and run on 3.10 or later, `preflight.py` on
+  3.9 or later.
 - pip, inside a virtual environment. Upgrade it first: the pip that ships with Python 3.12 is
   too old for `--requirements-from-script`.
 - Optional: [uv](https://docs.astral.sh/uv/getting-started/installation/), in place of the venv.
@@ -110,8 +111,8 @@ until the next restart. Do not keep it next to the installed copy: both have the
 
 After a code change, press Reload on the extension's card.
 
-`page_eval` needs "Allow user scripts" on the extension's Details page (Chrome 138 and later),
-and only you can turn it on. Without it every other tool works and `page_eval` returns
+`page_eval` needs "Allow user scripts" on the extension's Details page, and only you can turn
+it on. Without it every other tool works and `page_eval` returns
 `EVAL_UNAVAILABLE`. The popup then reads "Connected but scripts are blocked"; click "scripts
 are blocked" to reach the switch.
 

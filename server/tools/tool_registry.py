@@ -3,8 +3,8 @@
 The wire contract here is byte-exact: the `tools/list` shape is pinned by
 `tests/unit/golden/tools_list.json`, and the argument-error texts that the harness and
 agents read are pinned by `tests/unit/test_tool_registry.py`. The rules come from fastmcp
-4.0.10, which served this contract before the move to the official SDK (see
-.tmp/2026-10-01-mcp-sdk-migration.md). The module implements them on pydantic and the
+4.0.10, which served this contract before the move to the official SDK.
+The module implements them on pydantic and the
 stdlib, so the server can sit on the SDK's low-level `Server` without the SDK's own tool
 layer, which differs on every point below (migration plan, D1/D2):
 

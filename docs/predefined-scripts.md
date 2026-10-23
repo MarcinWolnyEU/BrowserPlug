@@ -74,11 +74,11 @@ browser. Put only scripts you trust in the directory.
 
 | Script | Arguments | What the JavaScript does |
 |---|---|---|
-| `youtube-play-pause.py` | `[]`, or one of `["play"]`, `["pause"]`, `["toggle"]` | clicks the player's play button when the state needs to change; the default is toggle |
-| `gcal-daily-events-js.py` | `["day"]`, `["day","month"]` or `["day","month","year"]` | reads one day's events from Google Calendar's month view; month and year default to today's |
+| `youtube-play-pause.py` | `[]`, or one of `["play"]`, `["pause"]`, `["toggle"]` | clicks the player's play button when `video.paused` says the state needs to change; the default is toggle. It does not check the video afterwards, so if the browser blocked autoplay it can report `success:true` while the video stays paused |
+| `gcal-daily-events-js.py` | `["day"]`, `["day","month"]` or `["day","month","year"]` | reads one day's events from Google Calendar's month view; month and year default to today's. Each event comes back as two or three entries, and `eventCount` counts entries, not events |
 | `gcal-cal-event-js.py` | `["title","day","time"]` | finds an event on that day of the current month, by exact title or else by event text containing the title and `time` (such as `11:30am`), opens it and reads its details |
-| `gcal-monthly-events-js.py` | none | reads every event of the current month, grouped by day |
-| `dom-summarize.py` | none, `["onscreen"]` or `["onscreen","withpos"]` | lists the page's visible interactive elements (inputs, buttons, links, options and anything with an `on*` attribute) as an indented tree and tags each with a `dsid` attribute that stays on the element; `onscreen` keeps only elements inside the viewport, and `withpos` adds `pos="x,y,width,height"` and needs `onscreen` |
+| `gcal-monthly-events-js.py` | none | reads the current month's events, grouped by day. Each event comes back as two or three entries, so `eventCount` and `summary.totalEvents` overstate |
+| `dom-summarize.py` | none, `["onscreen"]` or `["onscreen","withpos"]` | lists the page's visible interactive elements (inputs, buttons, links, options and anything with an `on*` attribute) as an indented tree and tags each with a `dsid` attribute that stays on the element; `onscreen` keeps only elements inside the viewport (a tab that has no layout, such as a background tab you never showed, returns nothing), and `withpos` adds `pos="x,y,width,height"` and needs `onscreen` |
 
 The Google Calendar scripts depend on class names in Calendar's month view (`.qLWd9c` and a
 few others), which Google can change without notice. When one returns nothing, check those
@@ -86,9 +86,7 @@ first. They recognize times only in 12-hour form (`9am`, `11:30am`).
 
 They find a day by its position in the month grid, so the month on screen must be the month
 the script reads: the one you ask for in `gcal-daily-events-js.py`, the current month in the
-other two. The grid starts on your first day of the week (Monday on a European profile). The
-scripts read the first column header, in the page's language and then in English, to learn
-which day that is, and assume Sunday when they cannot tell.
-
-`gcal-cal-event-js.py` opens the event's dialog with a click, which needs a visible window.
-In a background tab it can find the event and still fail to open the dialog.
+other two. A wrong month is not detected: the script returns another day's events with
+`success:true`. The grid starts on your first day of the week (Monday on a European
+profile). The scripts read the first column header, in the page's language and then in
+English, to learn which day that is, and assume Sunday when they cannot tell.

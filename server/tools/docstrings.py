@@ -2,9 +2,9 @@
 
 Every byte this module produces is re-sent on each `tools/list`, and the pinned golden
 (`tests/unit/golden/tools_list.json`) pins those bytes. The rules are those of the griffe
-parse that fastmcp 4.0.10 applied before the SDK migration (see
-.tmp/2026-10-01-mcp-sdk-migration.md). This module reproduces that parse with the stdlib,
-so a docstring change moves a description only where a test says it should:
+parse that fastmcp 4.0.10 applied before the SDK migration. This module reproduces that
+parse with the stdlib, so a docstring change moves a description only where a test says
+it should:
 
   * the tool description is the FIRST text section of `inspect.getdoc(fn)`. An `Args:`
     block ends it, and so does any admonition-shaped paragraph (a `Word words:` line

@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.10"
 # # The same specifier as tests/run.py declares.
-# dependencies = ["pillow>=12.3.0"]
+# dependencies = ["pillow>=13.0.0"]
 # ///
 """Render the BrowserPlug icon set from the masters in ./masters, then install the shipped
 subset into both extension trees (run: uv run --script assets/icons/render.py [--check]).

@@ -1,11 +1,10 @@
 """T5/T6 regression table: the landed-elsewhere guard and url_diff's false alarms.
 
-Written red-first against the pre-fix code (see .tmp/server-launcher-review-2026-09-29.md,
-findings T5 and T6). Two families:
+Written red-first against the pre-fix code. Two families:
 
-  * QUIET: benign differences a browser or site introduces must not raise the loud
+  - QUIET: benign differences a browser or site introduces must not raise the loud
     LANDED ELSEWHERE header (url_diff) and must not block a fused read (fused_read).
-  * LOUD: same-host login walls, hash-route redirects and a page that moved between the
+  - LOUD: same-host login walls, hash-route redirects and a page that moved between the
     settle and the read must block the read and be named by url_diff.
 """
 

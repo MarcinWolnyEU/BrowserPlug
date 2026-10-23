@@ -1,8 +1,7 @@
 """Unit tests for server/tools/docstrings.py: tool text from a docstring.
 
-The expected values are those of griffe's Google parser (the pre-SDK implementation, see
-.tmp/2026-10-01-mcp-sdk-migration.md; a differential run over 20,000 generated docstrings
-found no difference). The real tool docstrings are cross-checked against the pinned
+The expected values are those of griffe's Google parser.
+The real tool docstrings are cross-checked against the pinned
 tools/list golden, which is where these bytes end up.
 """
 
