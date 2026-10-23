@@ -4359,11 +4359,13 @@ async function handleContentAction(id, action, data) {
           // page_eval runs arbitrary code STRINGS, which scripting.executeScript cannot
           // do; it needs chrome.userScripts, gated on the "Allow user scripts" toggle.
           if (!userScriptsAvailable()) {
-            const e = new Error('page_eval needs the "Allow user scripts" toggle enabled for ' +
-              'BrowserPlug at chrome://extensions/?id=' + browser.runtime.id + ' — Chrome 138+ shows a ' +
-              'per-extension "Allow user scripts" switch on the extension details page. Enable it, ' +
-              'then retry. (This is a one-time user action Chrome requires before an extension may ' +
-              'run arbitrary page code; it cannot be enabled programmatically.)');
+            // No browser name or version: Opera numbers its own releases (Opera 137 runs
+            // Chromium 153), so "Chrome 138+" would tell an Opera user their browser is too
+            // old. minimum_chrome_version already guarantees the switch exists.
+            const e = new Error('page_eval needs the "Allow user scripts" switch turned on for ' +
+              'BrowserPlug, on the extension\'s details page: chrome://extensions/?id=' +
+              browser.runtime.id + ' (Edge, Opera and Brave open that address too). Only the ' +
+              'user can turn it on, and it stays on; retry once it is.');
             e.code = 'EVAL_UNAVAILABLE';
             throw e;
           }

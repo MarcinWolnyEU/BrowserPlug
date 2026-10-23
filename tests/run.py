@@ -23,7 +23,7 @@
 #     # The parallel phase of `--integration` (pytest -n).
 #     "pytest-xdist==3.8.0",
 #     # Screenshot decoding in test_agent_experience.py (missing, those checks would skip).
-#     "pillow>=12.3.0",
+#     "pillow>=13.0.0",
 #     # Property-based fuzz tests (tests/unit/test_fuzz_*.py); a floor, not a pin, since
 #     # the tests state properties and do not depend on one release's behaviour.
 #     "hypothesis>=6.169.0",
