@@ -1,0 +1,12 @@
+{
+  "name": "browserplug-local",
+  "interface": {"displayName": "BrowserPlug"},
+  "plugins": [
+    {
+      "name": "browserplug",
+      "source": {"source": "local", "path": "./plugins/browserplug"},
+      "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+      "category": "Productivity"
+    }
+  ]
+}
