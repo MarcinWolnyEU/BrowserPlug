@@ -1,0 +1,15 @@
+{
+  "name": "browserplug",
+  "version": "0.1.0",
+  "description": "Read and control your live, logged-in browser through BrowserPlug.",
+  "author": {
+    "name": "Marcin Wolny"
+  },
+  "requires_local_executor": true,
+  "interface": {
+    "displayName": "BrowserPlug",
+    "shortDescription": "Use your live, logged-in browser",
+    "category": "Productivity"
+  },
+  "mcpServers": "./.mcp.json"
+}
