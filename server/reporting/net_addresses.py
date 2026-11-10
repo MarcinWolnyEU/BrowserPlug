@@ -6,6 +6,7 @@ so nothing has to import server.py to reach them.
 """
 
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,17 @@ def lan_addresses():
     addrs = set()
     try:
         import socket
+        if sys.platform == "darwin":
+            # A Mac whose own name does not resolve (a .local name with no mDNS answer, a
+            # VPN that swallows it) blocks getaddrinfo(gethostname()) for 5 s, and /health
+            # waited on it. The interface table needs no resolver.
+            import psutil
+            for infos in psutil.net_if_addrs().values():
+                for info in infos:
+                    if info.family == socket.AF_INET and not info.address.startswith(
+                            ("127.", "169.254.")):
+                        addrs.add(info.address)
+            return sorted(addrs)
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ip = info[4][0]
             if not ip.startswith("127."):

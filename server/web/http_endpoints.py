@@ -400,6 +400,14 @@ async def _stop(req, action):
         await req.json_reply({"status": "restarting", "pid": os.getpid()}, no_store=False)
         return
 
+    if server.lifecycle.restarting:
+        # Stopping now would end only this process: the replacement it has spawned (or is
+        # about to) would take over the ports and keep running. 409 says "not now";
+        # control.py shutdown retries and so stops the replacement instead.
+        await http_auth.refuse(req.send, 409, "a restart is in progress; retry the shutdown "
+                                              "once it has finished (it stops the replacement)")
+        return
+
     await req.json_reply({"status": action + "ing", "pid": os.getpid()}, no_store=False)
 
     def _do_shutdown():

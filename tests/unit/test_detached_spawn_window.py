@@ -21,10 +21,12 @@ answer.
 """
 
 import os
+import signal
 import subprocess
 import sys
 import textwrap
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -36,6 +38,7 @@ from browserplug_shared.mcp_port import detached_spawn_kwargs
 from server.server import BrowserPlugServer
 
 DETACHED_PROCESS = 0x00000008
+SHARED_PY = str(Path(__file__).resolve().parents[2] / "shared-py")
 
 
 class _FakePopen:
@@ -115,3 +118,82 @@ def test_both_spawners_use_the_shared_windowless_policy(tmp_path):
     if fake.kwargs["stdout"] is not subprocess.DEVNULL:
         fake.kwargs["stdout"].close()
     assert fake.kwargs["creationflags"] == expected, "/restart replacement is not windowless"
+
+
+# --- POSIX: the same helper, judged by session and by what outlives the parent ---------
+
+# A parent that starts one child with detached_spawn_kwargs() ("detached") or with none
+# ("plain"), reports its pid, and then idles so the test can kill the parent's whole group.
+_PARENT = textwrap.dedent("""
+    import subprocess, sys, time
+    sys.path.insert(0, sys.argv[2])
+    from browserplug_shared.mcp_port import detached_spawn_kwargs
+    kwargs = detached_spawn_kwargs() if sys.argv[1] == "detached" else {}
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, **kwargs)
+    print(child.pid, flush=True)
+    time.sleep(120)
+""")
+
+
+def _alive(pid):
+    import psutil
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _spawn_then_kill_the_parents_group(mode):
+    """Start a parent in its own process group, let it spawn a child, SIGKILL that group.
+
+    Returns the child's pid, for the caller to clean up. A child left in the parent's group
+    dies with it; a detached one is in a session of its own and does not.
+    """
+    parent = subprocess.Popen([sys.executable, "-c", _PARENT, mode, SHARED_PY],
+                              stdout=subprocess.PIPE, start_new_session=True)
+    try:
+        child_pid = int(parent.stdout.readline())
+    finally:
+        os.killpg(parent.pid, signal.SIGKILL)
+        parent.wait(timeout=10)
+        parent.stdout.close()
+    return child_pid
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sessions")
+def test_posix_detach_asks_for_a_new_session():
+    assert detached_spawn_kwargs() == {"start_new_session": True}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sessions")
+def test_a_detached_child_leads_a_session_of_its_own():
+    """The child is its own session and process group leader, so a signal sent to the
+    parent's group (a terminal hang-up, a killpg from a supervisor) never reaches it."""
+    probe = "import os; print(os.getsid(0), os.getpgid(0), os.getpid())"
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                         timeout=30, **detached_spawn_kwargs()).stdout.split()
+    sid, pgid, pid = map(int, out)
+    assert sid == pid == pgid, f"not a session leader: sid={sid} pgid={pgid} pid={pid}"
+    assert sid != os.getsid(0), "the child shares this test's session"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sessions")
+def test_a_detached_child_survives_its_parent_and_a_plain_one_does_not():
+    """The property the server depends on: it outlives every client. The plain child is the
+    control, proving the kill reaches a child that stayed in the group."""
+    detached = _spawn_then_kill_the_parents_group("detached")
+    plain = _spawn_then_kill_the_parents_group("plain")
+    try:
+        deadline = time.monotonic() + 10
+        while _alive(plain) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(plain), "the control child outlived its group: the kill proves nothing"
+        assert _alive(detached), "the detached child died with its parent's group"
+    finally:
+        for pid in (detached, plain):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

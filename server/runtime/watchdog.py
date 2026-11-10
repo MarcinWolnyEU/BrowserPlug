@@ -341,21 +341,40 @@ def suspended_seconds():
     """Cumulative seconds this machine has spent suspended since boot, or None when the
     platform cannot say. Two clocks that differ only by suspended time, subtracted:
     Windows has the interrupt time with and without sleep, Linux has CLOCK_BOOTTIME and
-    CLOCK_MONOTONIC. macOS's monotonic clock already stops during sleep, so a suspend
-    never shows up as a late tick there."""
+    CLOCK_MONOTONIC, macOS has CLOCK_MONOTONIC_RAW (mach_continuous_time, counts sleep) and
+    CLOCK_UPTIME_RAW (mach_absolute_time, does not). Both are unadjusted, so the difference
+    is exact; CLOCK_MONOTONIC is slewed by NTP and could drift the figure below zero. The
+    result is never negative: the two reads are not simultaneous, so the difference is
+    clamped at 0.
+
+    macOS needs this although time.monotonic() stops during sleep there, so a suspend never
+    makes a tick late. None means "cannot tell a suspend from a stall", and the supervisor
+    forgives every late tick when it gets None: without a figure, a server that froze
+    while the machine was awake went unnoticed on macOS."""
     try:
         if sys.platform == "win32":
             biased = ctypes.c_ulonglong()
             unbiased = ctypes.c_ulonglong()
             ctypes.WinDLL("kernelbase").QueryInterruptTime(ctypes.byref(biased))
             ctypes.WinDLL("kernel32").QueryUnbiasedInterruptTime(ctypes.byref(unbiased))
-            return (biased.value - unbiased.value) / 1e7      # 100 ns units
-        if sys.platform.startswith("linux"):
-            return (time.clock_gettime(time.CLOCK_BOOTTIME)
-                    - time.clock_gettime(time.CLOCK_MONOTONIC))
+            suspended = (biased.value - unbiased.value) / 1e7      # 100 ns units
+        elif sys.platform.startswith("linux"):
+            suspended = (time.clock_gettime(time.CLOCK_BOOTTIME)
+                         - time.clock_gettime(time.CLOCK_MONOTONIC))
+        elif sys.platform == "darwin":
+            # The clock that does not count sleep is read first: the one read second has
+            # advanced by the gap between the two reads, so the difference errs high, never
+            # below zero.
+            awake = time.clock_gettime(time.CLOCK_UPTIME_RAW)
+            suspended = time.clock_gettime(time.CLOCK_MONOTONIC_RAW) - awake
+        else:
+            return None
+        # Two reads a few microseconds apart can still cross on a host that never slept
+        # (Windows and Linux read the sleep-counting clock first); there is no negative
+        # suspended time.
+        return max(0.0, suspended)
     except Exception:
-        pass
-    return None
+        return None
 
 
 def terminate_process(code=1):

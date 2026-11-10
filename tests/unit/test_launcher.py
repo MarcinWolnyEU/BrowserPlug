@@ -139,6 +139,10 @@ class TestProxyWiring:
     def test_main_wires_the_proxy_to_the_discovered_port(self, popen):
         """Drive main() with the server discovery stubbed and the child stubbed out: what
         is left is exactly the wiring under test."""
+        # The first client_pid() may run `ps` where there is no native reader, and that goes
+        # through the faked Popen too. Resolve it first so only the proxy child is recorded.
+        client_pid()
+        popen.calls.clear()
         with patch.object(launcher, "ensure_server", return_value=2833):
             assert launcher.main() == 0
 

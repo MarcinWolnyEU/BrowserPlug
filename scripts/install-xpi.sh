@@ -21,7 +21,8 @@ usage() {
     echo "                              (found in about:profiles page)"
     echo ""
     echo "Examples:"
-    echo "  $0 ~/.mozilla/firefox/abc123.default-release"
+    echo "  $0 ~/.mozilla/firefox/abc123.default-release                          (Linux)"
+    echo "  $0 \"\$HOME/Library/Application Support/Firefox/Profiles/abc123.default-release\"   (macOS)"
     echo "  $0 /path/to/profile"
     echo ""
     echo "⚠️  IMPORTANT: Firefox must be completely closed before running this script."
@@ -103,7 +104,9 @@ if [ -f "$USER_JS" ] && grep -q "xpinstall.signatures.required" "$USER_JS"; then
         info "Preference already set correctly in user.js"
     else
         info "Updating existing xpinstall.signatures.required preference..."
-        sed -i 's/user_pref("xpinstall.signatures.required".*);/user_pref("xpinstall.signatures.required", false);/' "$USER_JS"
+        # -i.bak with the backup removed afterwards: GNU and BSD (macOS) sed disagree on a bare -i.
+        sed -i.bak 's/user_pref("xpinstall.signatures.required".*);/user_pref("xpinstall.signatures.required", false);/' "$USER_JS"
+        rm -f "$USER_JS.bak"
     fi
 else
     # Add new preference

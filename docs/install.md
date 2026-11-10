@@ -64,6 +64,24 @@ from `server/server.py.lock` on the first start and keeps it current. Skip the v
 register the launcher in one of the two uv forms in
 [mcp-clients.md](mcp-clients.md#where-each-client-keeps-its-registration).
 
+### On macOS
+
+Install uv with Homebrew (`brew install uv`) or uv's own installer, then register the
+launcher as `uv run --script` ([mcp-clients.md](mcp-clients.md#where-each-client-keeps-its-registration)).
+Name uv by absolute path (`which uv`; `/opt/homebrew/bin/uv` for Homebrew on Apple Silicon,
+`/usr/local/bin/uv` on Intel). A client started from the Dock or Spotlight does not read your
+shell profile and may not have Homebrew's folder on its `PATH`, so a bare `uv` fails there
+with "command not found". A venv registration names its interpreter by absolute path anyway.
+
+uv's managed-interpreter form is not offered on macOS; use the venv or `uv run --script`.
+
+BrowserPlug keeps its state in `~/.local/state/browserplug/`, not under `~/Library`
+([server.md](server.md#where-the-state-lives)).
+
+A client config copied from a Windows machine does not work here. `python server/preflight.py`
+reports it as broken, with a note that it was written for Windows, because its `C:\...` paths
+cannot exist on a Mac. Register BrowserPlug again with this machine's paths.
+
 ## Building the packages
 
 ```bash
@@ -97,6 +115,10 @@ Download it from <https://www.mozilla.org/firefox/developer/>.
 1. In `about:config`, accept the warning and set `xpinstall.signatures.required` to `false`.
 2. In `about:addons`, open the gear menu, choose Install Add-on From File and pick
    `dist/firefox/browserplug@marcinwolny.net.xpi`.
+
+On macOS the app is `Firefox Developer Edition.app`; the steps are the same. Once a store
+listing is approved, release Firefox installs the signed extension from it. A build from
+source loads only in Developer Edition or Nightly.
 
 The extension stays installed across restarts. For development, `about:debugging#/runtime/this-firefox`
 ▸ Load Temporary Add-on ▸ `extension-gecko/manifest.json` gives a Reload button and a console
@@ -230,7 +252,9 @@ ports out of these scripts ([server.md](server.md#ports) says why).
 
 - macOS: a LaunchAgent in `~/Library/LaunchAgents/` with `RunAtLoad` true, running
   `/abs/path/to/venv/bin/python /abs/path/to/browserplug/server/control.py start`, and
-  `BROWSERPLUG_SERVER_PYTHON` under `EnvironmentVariables`.
+  `BROWSERPLUG_SERVER_PYTHON` under `EnvironmentVariables`. launchd does not read `~/.zshrc` or
+  `~/.profile`, so every path in the plist has to be absolute and the variable has to be in
+  the plist itself.
 - Linux: a `systemd --user` unit running the same command, with
   `Environment=BROWSERPLUG_SERVER_PYTHON=/abs/path/to/venv/bin/python`, `Type=oneshot`,
   `RemainAfterExit=yes` (so systemd leaves the started server alone) and
@@ -254,6 +278,8 @@ ports out of these scripts ([server.md](server.md#ports) says why).
 | A client cannot reach `http://localhost:2830/mcp` | Check that the server runs (`python server/control.py status`), that the client's port matches `BROWSERPLUG_MCP_PORT`, and that the URL has no trailing slash. |
 | Clients time out after about 30 s while `/health` answers on another port | A port set in an autostart script put the server outside 2830 to 2942. Remove it, run `python server/control.py shutdown`, then start the server again. |
 | `claude mcp get browserplug` does not report it as connected | Run `python server/preflight.py`; it names the step that failed. |
+| `python server/preflight.py` says a client config "was written for Windows" (macOS and Linux) | The config was copied from a Windows machine. Register BrowserPlug again with this machine's paths ([On macOS](#on-macos)). |
+| On macOS a client reports `uv: command not found`, or exits at once | The client was started from the Dock and has no Homebrew on its `PATH`. Register uv by absolute path ([On macOS](#on-macos)). |
 | Firefox does not keep the extension after a restart | You are on release or beta Firefox. Use Developer Edition with `xpinstall.signatures.required` set to `false`. |
 | `page_eval` returns `EVAL_UNAVAILABLE` on Chrome, Edge or Brave | Turn on "Allow user scripts" on the extension's Details page. |
 | A `proxy` argument is refused | Proxy routing is off until you allow it ([proxy-and-tor.md](proxy-and-tor.md#turning-it-on)). |

@@ -38,7 +38,7 @@ import pytest
 import test_imports  # noqa: F401
 from port_coordinator import allocate_port
 from server.runtime import lifecycle
-from browserplug_shared import device_tokens, request_signing, server_env
+from browserplug_shared import device_tokens, proc_facts, request_signing, server_env
 from browserplug_shared.config_store import STATE_DIR_ENV
 from browserplug_shared.mcp_port import DETACHED_ENV, LOG_FILE_ENV, MCP_PORT_ENV, browserplug_health
 from browserplug_shared.ws_token import WS_HOST_ENV, WS_TOKEN_ENV, WS_TOKEN_FILE_ENV
@@ -95,10 +95,18 @@ class Sandbox:
         return proc
 
     def health(self, timeout=1.0):
-        data = browserplug_health(self.mcp_port, timeout=timeout)
+        # The identity reply: these checks read server_pid and the ports, and the sub-second
+        # budget must not depend on how long the full report takes to build (on a Mac whose
+        # own hostname does not resolve, that was 5 s of getaddrinfo).
+        data = browserplug_health(self.mcp_port, timeout=timeout, identity=True)
         if data and data.get("server_pid"):
             self.seen_pids.add(data["server_pid"])
         return data
+
+    def full_health(self, timeout=20.0):
+        """The full /health report, for the few tests that read the roster or the bind
+        settings; the budget covers a slow report (see `health`)."""
+        return browserplug_health(self.mcp_port, timeout=timeout)
 
     def wait_healthy(self, timeout=START_TIMEOUT, not_pid=None):
         """The /health of a server on this sandbox's port; `not_pid` waits out an old one."""
@@ -112,9 +120,11 @@ class Sandbox:
                              + self.diagnostics())
 
     def wait_gone(self, pid, timeout=20.0):
+        # pid_alive, not psutil.pid_exists: a server this test started and has not waited
+        # for is a zombie once it exits, and pid_exists (kill 0) reports a zombie as there.
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if not psutil.pid_exists(pid):
+            if not proc_facts.pid_alive(pid):
                 return
             time.sleep(0.1)
         raise AssertionError(f"process {pid} is still alive after {timeout:.0f}s")
@@ -518,7 +528,7 @@ def test_ws_bind_moves_a_real_server_to_the_new_bind_and_it_survives_the_restart
     replacement, and no socket ever listens beyond this machine. (0.0.0.0 would work the
     same way and is what the in-process tests use; it stays out of here on purpose.)"""
     sandbox.start()
-    before = sandbox.wait_healthy()
+    before = {**sandbox.wait_healthy(), **sandbox.full_health()}
     assert before["ws_host"] == "localhost"
     assert before["ws_host_source"] == "default"
 
@@ -531,7 +541,7 @@ def test_ws_bind_moves_a_real_server_to_the_new_bind_and_it_survives_the_restart
     reply = json.loads(body)
     assert reply["status"] == "restarting" and reply["ws_host"] == "127.0.0.1"
     assert reply["ws_accepts_remote"] is False
-    after = sandbox.wait_healthy(not_pid=before["server_pid"])
+    after = {**sandbox.wait_healthy(not_pid=before["server_pid"]), **sandbox.full_health()}
     assert after["ws_host"] == "127.0.0.1"
     assert after["ws_host_source"] == "file", "the replacement read the bind back from disk"
     config = json.loads((sandbox.state / "config.json").read_text(encoding="utf-8"))

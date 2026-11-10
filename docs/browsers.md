@@ -59,7 +59,9 @@ and the first-started rule applies while it is not.
 
 For a pinned browser on the server's machine, "Let the server start this browser when none is
 connected" starts it when a call arrives and nothing is connected, then waits up to 25 seconds
-(`BROWSERPLUG_BROWSER_LAUNCH_WAIT`) for it to connect. The startup arguments are read-only in
+(`BROWSERPLUG_BROWSER_LAUNCH_WAIT`) for it to connect. On macOS the server starts the browser
+through the system's `open` command, so the app starts as it would from the Dock and the
+startup arguments reach it even when it is already running. The startup arguments are read-only in
 Options because they become a command line the server runs; edit `launch_args` under
 `default_browser` in the server's `config.json` ([server.md](server.md#where-the-state-lives)).
 

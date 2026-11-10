@@ -605,19 +605,55 @@ def test_the_repos_own_config_moved_with_the_repo_says_so(tmp_path):
     the author's box therefore failed this check on every server_info with a message
     about a config "written on another box" — it was written on this one, at another
     path, and the fix is a prefix, not a rebuild."""
-    (tmp_path / ".venv" / "Scripts").mkdir(parents=True)
-    (tmp_path / ".venv" / "Scripts" / "python.exe").write_text("x", encoding="utf-8")
+    # The old root is spelled in this host's own form: a Windows prefix cannot be measured
+    # against a POSIX checkout (see the next test for what a POSIX host says to one).
+    if os.name == "nt":
+        old_root, venv_python = r"V:\MCP\checkout", os.path.join(".venv", "Scripts", "python.exe")
+    else:
+        old_root, venv_python = "/mnt/old/checkout", os.path.join(".venv", "bin", "python")
+    (tmp_path / venv_python).parent.mkdir(parents=True)
+    (tmp_path / venv_python).write_text("x", encoding="utf-8")
     (tmp_path / "server").mkdir()
     (tmp_path / "server" / "launcher.py").write_text("x", encoding="utf-8")
-    records = configs_for(tmp_path, [r"V:\MCP\checkout\.venv\Scripts\python.exe",
-                                     r"V:\MCP\checkout\server\launcher.py"])
+    records = configs_for(tmp_path, [os.path.join(old_root, venv_python),
+                                     os.path.join(old_root, "server", "launcher.py")])
 
     check = preflight.check_client_config(records, discovery(health()), str(tmp_path))
     assert check["ok"] is False, "for anyone who runs that client it is genuinely broken"
-    assert r"written for a checkout at V:\MCP\checkout" in check["detail"]
+    assert f"written for a checkout at {old_root}" in check["detail"]
     assert f"this one is at {tmp_path}" in check["detail"]
     assert "this repo's own sample file" in check["detail"]
-    assert "replace the" in check["remedy"] and r"V:\MCP\checkout" in check["remedy"]
+    assert "replace the" in check["remedy"] and old_root in check["remedy"]
+
+
+def test_a_windows_form_path_is_missing_on_every_host(tmp_path):
+    """`os.path.isabs` is False for `C:\\x` on POSIX, so the path check used to skip it and a
+    config synced from a Windows machine passed. It cannot work there, and nothing about it
+    is a relocation: the layout differs too (`Scripts\\python.exe` against `bin/python`)."""
+    records = configs_for(tmp_path, [r"V:\MCP\checkout\.venv\Scripts\python.exe",
+                                     r"V:\MCP\checkout\server\launcher.py"])
+    entry = records[0]["entries"][0]
+    assert entry["missing_paths"] == [r"V:\MCP\checkout\.venv\Scripts\python.exe",
+                                      r"V:\MCP\checkout\server\launcher.py"]
+    check = preflight.check_client_config(records, discovery(health()), str(tmp_path))
+    assert check["ok"] is False
+    assert "written for a checkout" not in check["detail"]
+    assert ("A Windows path cannot exist on this machine" in check["detail"]) == (os.name != "nt")
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("C:\\x\\python.exe", True), ("c:/x/python.exe", True), ("\\\\host\\share\\x", True),
+    ("python", False), ("uv", False), ("http://localhost:2830/mcp", False), ("--script", False),
+    ("C:", False), ("relative\\dir\\x", False),
+])
+def test_what_counts_as_a_windows_form_path(path, expected):
+    assert preflight._is_windows_form(path) is expected
+
+
+def test_the_foreign_form_note_is_for_posix_hosts_only():
+    assert "Windows path cannot exist" in preflight._foreign_form_note([r"C:\x"], False)
+    assert preflight._foreign_form_note(["/gone/python"], False) == ""
+    assert preflight._foreign_form_note([r"C:\x"], True) == ""
 
 
 def test_a_config_outside_the_repo_keeps_the_written_elsewhere_message(tmp_path):
@@ -861,7 +897,7 @@ def test_the_uv_run_registration_passes_with_its_cost_and_the_replacement(tmp_pa
     check = preflight.check_client_config(records, _attached(), root, uv=uv,
                                           launcher=(python, None))
     assert check["ok"] is True, "it works: only the cost is reported"
-    assert "uv run --script" in check["detail"] and "uv.exe resident" in check["detail"]
+    assert "uv run --script" in check["detail"] and preflight._uv_run_cost() in check["detail"]
     assert f"`{python} {launcher}`" in check["remedy"]
     assert "keeps working until then" in check["remedy"]
 
@@ -1169,6 +1205,82 @@ def test_no_config_anywhere_is_could_not_check_not_a_failure(tmp_path):
     check = preflight.check_client_config([], discovery(health()))
     assert check["ok"] is None
     assert "each MCP client has its OWN" in check["detail"]
+
+
+def _write_server_config(path, key="mcpServers"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({key: {"browserplug": {
+        "type": "stdio", "command": "python", "args": ["launcher.py"]}}}), encoding="utf-8")
+
+
+def _configs_found(tmp_path, platform, **env):
+    records = preflight.collect_client_configs(
+        str(tmp_path / "root"), env={"HOME": str(tmp_path), **env}, platform=platform)
+    return {(r["client"], os.path.relpath(r["path"], tmp_path).replace(os.sep, "/"))
+            for r in records}
+
+
+def test_macos_client_configs_live_under_library_application_support(tmp_path):
+    support = tmp_path / "Library" / "Application Support"
+    _write_server_config(support / "Code" / "User" / "mcp.json", "servers")
+    _write_server_config(support / "Claude" / "claude_desktop_config.json")
+    _write_server_config(tmp_path / ".gitlab" / "duo" / "mcp.json")
+    assert _configs_found(tmp_path, "darwin") == {
+        ("VS Code / GitHub Copilot", "Library/Application Support/Code/User/mcp.json"),
+        ("Claude Desktop", "Library/Application Support/Claude/claude_desktop_config.json"),
+        ("GitLab Duo", ".gitlab/duo/mcp.json")}
+
+
+def test_linux_client_configs_follow_xdg_config_home(tmp_path):
+    _write_server_config(tmp_path / ".config" / "Code" / "User" / "mcp.json", "servers")
+    assert _configs_found(tmp_path, "linux") == {
+        ("VS Code / GitHub Copilot", ".config/Code/User/mcp.json")}
+    _write_server_config(tmp_path / "xdg" / "Code" / "User" / "mcp.json", "servers")
+    _write_server_config(tmp_path / "xdg" / "gitlab" / "duo" / "mcp.json")
+    _write_server_config(tmp_path / "glab" / "duo" / "mcp.json")
+    assert _configs_found(tmp_path, "linux", XDG_CONFIG_HOME=str(tmp_path / "xdg"),
+                  GLAB_CONFIG_DIR=str(tmp_path / "glab")) == {
+        ("VS Code / GitHub Copilot", "xdg/Code/User/mcp.json"),
+        ("GitLab Duo", "xdg/gitlab/duo/mcp.json"),
+        ("GitLab Duo", "glab/duo/mcp.json")}
+
+
+def test_windows_keeps_its_appdata_folders_and_ignores_the_posix_ones(tmp_path):
+    _write_server_config(tmp_path / "ad" / "Code" / "User" / "mcp.json", "servers")
+    _write_server_config(tmp_path / "ad" / "GitLab" / "duo" / "mcp.json")
+    _write_server_config(tmp_path / ".config" / "Code" / "User" / "mcp.json", "servers")
+    # GitLab documents ~/.gitlab/duo/mcp.json for Linux and macOS only.
+    _write_server_config(tmp_path / ".gitlab" / "duo" / "mcp.json")
+    assert _configs_found(tmp_path, "win32", APPDATA=str(tmp_path / "ad")) == {
+        ("VS Code / GitHub Copilot", "ad/Code/User/mcp.json"),
+        ("GitLab Duo", "ad/GitLab/duo/mcp.json")}
+    assert _configs_found(tmp_path, "win32") == set(), "no APPDATA, no per-user folder to look in"
+
+
+def test_an_explicit_appdata_wins_on_a_posix_host_too(tmp_path):
+    _write_server_config(tmp_path / "ad" / "Code" / "User" / "mcp.json", "servers")
+    assert _configs_found(tmp_path, "darwin", APPDATA=str(tmp_path / "ad")) == {
+        ("VS Code / GitHub Copilot", "ad/Code/User/mcp.json")}
+
+
+def test_the_no_config_text_names_this_hosts_locations():
+    mac = preflight._known_config_paths("darwin")
+    assert "~/Library/Application Support/Code/User/mcp.json" in mac
+    assert "%APPDATA%" not in mac
+    assert "$XDG_CONFIG_HOME or ~/.config/Code/User/mcp.json" in preflight._known_config_paths(
+        "linux")
+    assert "%APPDATA%\\Code\\User\\mcp.json" in preflight._known_config_paths("win32")
+
+
+def test_no_config_found_names_the_locations_it_looked_in():
+    check = preflight.check_client_config([], discovery(health()), "root")
+    assert preflight._known_config_paths() in check["detail"]
+
+
+def test_the_uv_run_cost_quotes_windows_figures_only_on_windows():
+    cost = preflight._uv_run_cost()
+    assert ("uv.exe" in cost and "MB" in cost) == (os.name == "nt")
+    assert "resident" in cost
 
 
 def test_relative_commands_are_not_reported_as_missing_paths(tmp_path):

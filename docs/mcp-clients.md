@@ -15,13 +15,26 @@ Windows:
 | GitLab Duo | `%APPDATA%\GitLab\duo\mcp.json` | `mcpServers` | `{"type":"http","url":"http://localhost:2830/mcp","approvedTools":true}` |
 | pi | `%USERPROFILE%\.pi\agent\mcp.json` | `mcpServers` | `{"url":"http://localhost:2830/mcp","lifecycle":"keep-alive"}` |
 | Codex | `%USERPROFILE%\.codex\config.toml` | `[mcp_servers.browserplug]` | written by `codex mcp add` ([install.md](install.md#codex)) |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` | the same stdio entry |
+
+On macOS and Linux the files with a different location are these (the others sit in your home
+folder as above, `~/.claude.json` and so on):
+
+| Client | macOS | Linux |
+|---|---|---|
+| VS Code, GitHub Copilot | `~/Library/Application Support/Code/User/mcp.json` | `$XDG_CONFIG_HOME/Code/User/mcp.json`, or `~/.config/Code/User/mcp.json` when the variable is unset |
+| GitLab Duo | `~/.gitlab/duo/mcp.json` | `~/.gitlab/duo/mcp.json`; `$XDG_CONFIG_HOME/gitlab/duo/mcp.json` or `$GLAB_CONFIG_DIR/duo/mcp.json` when those variables are set |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | none: there is no official Linux build |
+
+The keys and entries are the ones in the Windows table. `%APPDATA%\GitLab\duo` is Windows only.
+Preflight reads Claude Desktop's file only when it already holds a BrowserPlug entry.
 
 `<python>` is the venv's interpreter ([install.md](install.md#a-venv)), by absolute path. The `env`
 entry hands the same path to the launcher as `BROWSERPLUG_SERVER_PYTHON`, and it has to sit in
 the client's own `env` block: some clients (Codex) start servers with a short list of
 environment variables, so one set in your shell does not reach them. The launcher itself runs
-on any Python 3.10 or later. On macOS and the BSDs it also needs psutil, which the venv's
-interpreter has and a bare one lacks.
+on any Python 3.10 or later. On macOS and the BSDs, register the venv's interpreter or
+`uv run --script`, not a bare interpreter.
 
 With uv installed you can skip the venv and the variable, and the launcher registers one of
 two ways:
@@ -31,10 +44,12 @@ two ways:
   `<checkout>\server\launcher.py` as the argument and no `env` block. Preflight prints the path
   for your machine, as does `uv python find --managed-python 3.12`. Use the link, not a patch
   path (`cpython-3.12.14-…`), which breaks when uv removes that release. Windows and Linux
-  only: elsewhere the bare interpreter has no psutil.
+  only: on macOS and the BSDs use one of the other two forms.
 - **`uv run --script`**: command `<uv>`, args `run`, `--script` and the launcher path. Give
-  uv's absolute path (`where uv`), since a client resolving a bare `uv` can pick up a `uv.exe`
-  in the project folder on Windows. uv supplies psutil on macOS only; on the BSDs use the venv.
+  uv's absolute path (`where uv` on Windows, `which uv` elsewhere), since a client resolving a
+  bare `uv` can pick up a `uv.exe` in the project folder on Windows, and a macOS client started
+  from the Dock may not have Homebrew's folder on its `PATH`. On macOS, for example, the command is
+  `/opt/homebrew/bin/uv`. On the BSDs use the venv.
 
 Stdio clients follow the server to another port; HTTP clients cannot, so if something else
 uses 2830, pin a port with `BROWSERPLUG_MCP_PORT` ([server.md](server.md#ports)). Write the URL

@@ -213,8 +213,59 @@ def test_a_download_that_fails_names_the_url(monkeypatch, tmp_path):
         raise OSError("network down")
 
     tor._opener = broken
+    monkeypatch.setattr(manager, "DOWNLOAD_BACKOFF_SECONDS", 0)
     with pytest.raises(manager.TorError, match="network down"):
         tor.ensure_installed()
+
+
+class _Declared(_Response):
+    """A response that declares its length, as a real one does."""
+
+    def __init__(self, body, declared):
+        super().__init__(body)
+        self.headers = {"Content-Length": str(declared)}
+
+
+def _short_then(monkeypatch, tmp_path, bodies):
+    """An installer whose downloads serve `bodies` in turn, each declaring the full length."""
+    full = _bundle_tarball()
+    tor, chosen, _ = _install_fixture(monkeypatch, tmp_path, full)
+    monkeypatch.setattr(manager, "DOWNLOAD_BACKOFF_SECONDS", 0)
+    served = []
+
+    def opener(url, timeout):
+        body = bodies[min(len(served), len(bodies) - 1)]
+        served.append(body)
+        return _Declared(body, len(full))
+
+    tor._opener = opener
+    return tor, chosen, served, full
+
+
+def test_a_short_download_is_retried_and_then_succeeds(monkeypatch, tmp_path):
+    full = _bundle_tarball()
+    tor, chosen, served, _ = _short_then(monkeypatch, tmp_path, [full[:10], full[:20], full])
+    tor.ensure_installed()
+    assert len(served) == 3
+    assert (tmp_path / "home" / chosen.folder / ".complete").is_file()
+
+
+def test_a_download_that_stays_short_fails_naming_the_byte_counts(monkeypatch, tmp_path):
+    full = _bundle_tarball()
+    tor, _, served, _ = _short_then(monkeypatch, tmp_path, [full[:10]])
+    with pytest.raises(manager.TorError, match=f"received 10 of {len(full)} bytes"):
+        tor.ensure_installed()
+    assert len(served) == manager.DOWNLOAD_ATTEMPTS
+    assert list((tmp_path / "home").iterdir()) == []
+
+
+def test_a_full_length_download_with_a_wrong_hash_still_fails_on_the_hash(monkeypatch, tmp_path):
+    full = _bundle_tarball()
+    wrong = b"x" * len(full)
+    tor, chosen, served, _ = _short_then(monkeypatch, tmp_path, [wrong])
+    with pytest.raises(manager.TorError, match="expected " + chosen.sha256):
+        tor.ensure_installed()
+    assert len(served) == 1
 
 
 def test_an_older_install_is_removed_after_a_new_one(monkeypatch, tmp_path):

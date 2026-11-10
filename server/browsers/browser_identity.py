@@ -10,13 +10,17 @@ and platform_edition read that.
 ExtBrowser is the registry record for one connected browser. It owns the naming
 properties (family, edition, display_name, name, describe) built from those pieces.
 
-The only I/O is one cached `os.path.exists` probe next to an executable. Nothing here
-imports server.py, and importing the module has no side effects.
+The only I/O is one cached `os.path.exists` probe next to an executable (and, for a macOS
+.app bundle, the cached reads in mac_bundle.py). Nothing here imports server.py, and
+importing the module has no side effects.
 """
 
 import os
+import re
 from datetime import datetime
 from typing import Optional
+
+from server.browsers import mac_bundle
 
 # --- Which browser is this, really? -----------------------------------------
 # Firefox FORKS run the extension unchanged, but most of them still answer
@@ -26,7 +30,8 @@ from typing import Optional
 # that used to test `"firefox" in process_name` goes through here instead, or a
 # fork reads as an unidentified browser with no pid/exe at all.
 #
-# Keys are process-name stems (no extension, no `-bin`/`-esr` suffix).
+# Keys are process-name stems (no extension, no `-bin`/`-esr` suffix). On macOS the stem is
+# the bundle's executable name, which is also the process name (`firefox`, `zen`).
 GECKO_PROCESS_BRANDS = {
     "firefox": "Firefox",
     "zen": "Zen Browser",
@@ -48,13 +53,30 @@ CHROMIUM_PROCESS_BRANDS = {
     "vivaldi": "Vivaldi",
     "opera": "Opera",
     "thorium": "Thorium",  # a common Chromium fork; extend as needed
+    "arc": "Arc",
+    # macOS names the process after the product, spaces and all (process_stem folds a
+    # channel suffix away, so Canary and Beta need no row of their own).
+    "google chrome": "Google Chrome",
+    "google chrome for testing": "Google Chrome",
+    "microsoft edge": "Microsoft Edge",
+    "brave browser": "Brave",
 }
+
+# A macOS channel is a separate bundle with its own executable name ("Google Chrome
+# Canary"), but its helpers keep the product's name ("Google Chrome Helper (Aperitif)",
+# measured in Canary 159), so the main process and its own helper only compare equal once
+# the channel is folded away. The family stays the product; chromium_variant reads the
+# channel from the bundle name, the way it reads the Windows install directory.
+_MAC_CHANNEL_RE = re.compile(
+    r"^(google chrome|microsoft edge|brave browser) (?:canary|beta|dev|nightly)$")
 
 # Runtime library, next to the executable: the fallback tell for a browser/fork we
 # have never heard of. Positive proof it's a browser, which the pid-merge path
 # needs (see _probe_browser_identity) and a bare "not one of our processes" guess
 # could never give.
 _GECKO_RUNTIME_FILES = ("xul.dll", "libxul.so", "XUL")
+# macOS: the bundle holds the runtime, not the directory of the helper that owns a socket.
+# See mac_bundle.runtime_engine.
 # The Chromium analog of xul.dll. Verified against dist/chrome-for-testing/chrome-win64/
 # (v151 and v154): chrome_elf.dll, chrome.dll and chrome_100_percent.pak all sit beside chrome.exe.
 # chrome_elf.dll / chrome.dll are the durable Windows tells; chrome_crashpad_handler is the
@@ -68,8 +90,18 @@ _gecko_dir_cache = {}
 
 
 def process_stem(proc_name):
-    """`firefox.exe` -> `firefox`; `waterfox-bin` -> `waterfox`."""
-    stem = os.path.splitext((proc_name or "").strip().lower())[0]
+    """`firefox.exe` -> `firefox`; `waterfox-bin` -> `waterfox`.
+
+    A macOS Chromium helper folds into its browser: `Google Chrome Helper (Renderer)` ->
+    `google chrome`. The caller that climbs from a socket's owner to the browser compares
+    stems, and a helper has to compare equal to the browser process above it.
+    """
+    name = (proc_name or "").strip()
+    base = mac_bundle.helper_base_name(name)
+    if base:
+        name = base
+    stem = os.path.splitext(name.lower())[0]
+    stem = _MAC_CHANNEL_RE.sub(r"\1", stem)
     for suffix in ("-bin", "-esr", "-default"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
@@ -96,15 +128,33 @@ def _dir_has_file(exe_path, files):
     return _gecko_dir_cache[key]
 
 
+def _mac_process_stem(proc_name, exe_path):
+    """The stem of the BROWSER a macOS process belongs to, or None off a bundle.
+
+    A helper (Chrome's renderer or network service, Firefox's plugin-container) answers
+    with its bundle's main executable, so it is branded like the browser itself. The main
+    executable answers with its own file name: psutil cuts a process name to 16 characters
+    (`Google Chrome fo`), the file name is whole.
+    """
+    bundle = mac_bundle.outermost_bundle(exe_path)
+    if not bundle:
+        return None
+    if mac_bundle.is_helper_exe(exe_path):
+        return process_stem(mac_bundle.main_executable_name(bundle))
+    return process_stem(os.path.basename(exe_path.replace("\\", "/")))
+
+
 def browser_brand(proc_name, exe_path=None):
     """(family, engine) of a process (engine in {"gecko", "blink"}), or (None, None)
     if it is not a browser at all (a python test harness faking the extension, say).
 
     An unknown fork still resolves: if a Gecko OR Chromium runtime sits next to the
     exe, the brand is derived from the executable's own name (and the engine from
-    whichever runtime it is) rather than dropped.
+    whichever runtime it is) rather than dropped. On macOS the runtime is looked for in the
+    enclosing .app bundle instead, because the process that matters is often a helper
+    nested deep inside it.
     """
-    stem = process_stem(proc_name)
+    stem = _mac_process_stem(proc_name, exe_path) or process_stem(proc_name)
     if not stem:
         return None, None
     if stem in GECKO_PROCESS_BRANDS:
@@ -115,13 +165,30 @@ def browser_brand(proc_name, exe_path=None):
         return _brand_from_stem(stem), "gecko"
     if _dir_has_file(exe_path, _CHROMIUM_RUNTIME_FILES):
         return _brand_from_stem(stem), "blink"
+    engine = mac_bundle.runtime_engine(mac_bundle.outermost_bundle(exe_path))
+    if engine:
+        return _brand_from_stem(stem), engine
     return None, None
+
+
+def _install_label(exe_path):
+    """The lower-cased text a variant marker is searched in.
+
+    A Windows or Linux install names its edition in a directory of the path. On macOS the
+    bundle name carries it (`Google Chrome Canary.app`), and only the bundle name is
+    searched: the rest of the path is the user's own directories, where a folder called
+    `my dev tools` must not turn Chrome into Chrome Dev.
+    """
+    bundle = mac_bundle.outermost_bundle(exe_path)
+    if bundle:
+        return (mac_bundle.bundle_name(bundle) or "").lower()
+    return (exe_path or "").lower()
 
 
 def gecko_variant(brand, exe_path):
     """The specific EDITION within a Gecko brand, when the install path names one
     (Firefox ships several side by side). Falls back to the brand itself."""
-    path_low = (exe_path or "").lower()
+    path_low = _install_label(exe_path)
     if brand == "Firefox":
         for marker, edition in (("developer edition", "Firefox Developer Edition"),
                                 ("nightly", "Firefox Nightly"),
@@ -135,9 +202,10 @@ def chromium_variant(brand, exe_path):
     """The specific CHANNEL within a Chromium brand, when the install path names one
     (Chrome/Edge ship Beta/Dev/Canary side by side). Falls back to the brand itself.
     Markers carry a leading space so a stray "dev"/"beta" substring never matches."""
-    path_low = (exe_path or "").lower()
-    for marker, channel in ((" canary", "Canary"), (" sxs", "Canary"),
-                            (" beta", "Beta"), (" dev", "Dev")):
+    path_low = _install_label(exe_path)
+    for marker, channel in ((" canary", "Canary"), (" sxs", "Canary"), (" nightly", "Nightly"),
+                            (" beta", "Beta"), (" dev", "Dev"),
+                            (" for testing", "for Testing")):
         if marker in path_low:
             return f"{brand} {channel}"
     return brand

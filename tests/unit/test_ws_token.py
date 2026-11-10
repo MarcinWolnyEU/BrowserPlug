@@ -1465,9 +1465,12 @@ def test_the_token_scan_covers_the_whole_tree():
                  "launcher/launcher.py", "server/runtime/lifecycle.py",
                  "server/web/http_endpoints.py"):
         assert must in rel, f"the token scan no longer covers {must}"
-    for never in ("node_modules/", ".venv/", ".tmp/", "dist/", "graft/", "feedback",
-                  "vendor/"):
+    for never in ("node_modules/", ".venv/", ".tmp/", "dist/", "vendor/"):
         assert not any(r.startswith(never) or f"/{never}" in r for r in rel), never
+    # graft/ and feedback* are ignored at the root only: a versioned skill may live in a
+    # nested .agents/skills/graft/ and is scanned like any other text.
+    for root_only in ("graft/", "feedback"):
+        assert not any(r.startswith(root_only) for r in rel), root_only
 
 
 # One tokenizer for JS-family text: strings and comments are consumed and dropped so that

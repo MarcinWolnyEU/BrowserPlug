@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 
 import test_imports  # noqa: F401
@@ -150,7 +151,7 @@ def test_rotation_resumes_after_blocker_releases(tmp_path, monkeypatch):
         handler.flush()
         assert os.path.exists(str(log) + ".1"), "rotation did not resume"
         # The pre-block history moved down the cascade, it was not dropped.
-        kept = "".join(open(f"{log}.{n}", encoding="utf-8").read() for n in (1, 2)
+        kept = "".join(Path(f"{log}.{n}").read_text(encoding="utf-8") for n in (1, 2)
                        if os.path.exists(f"{log}.{n}"))
         assert "0000" in kept
     finally:

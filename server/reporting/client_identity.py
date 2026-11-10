@@ -20,7 +20,8 @@ import re
 import time
 from datetime import datetime
 
-from server.browsers import browser_identity
+from browserplug_shared import socket_table
+from server.browsers import browser_identity, mac_bundle
 from server.reporting.arg_redaction import redact_urls_in_text
 
 logger = logging.getLogger(__name__)
@@ -31,9 +32,9 @@ def pid_for_local_port(port):
     if not port:
         return None
     try:
-        import psutil
-        for c in psutil.net_connections(kind='inet'):
-            if c.laddr and c.laddr.port == port and c.pid and c.status == psutil.CONN_ESTABLISHED:
+        for c in socket_table.tcp_connections():
+            if (c.laddr and c.laddr.port == port and c.pid
+                    and c.status == socket_table.CONN_ESTABLISHED):
                 return c.pid
     except Exception as e:
         logger.debug(f"pid lookup failed for port {port}: {e}")
@@ -63,6 +64,29 @@ PROXY_ENTRY_PATH = os.path.normcase(os.path.join(_PROJECT_ROOT, "server", "proxy
 MAX_LAUNCHER_HOPS = 6
 
 
+def _resolve_arg(cwd, token):
+    """`token` as an absolute, normalised path in this host's own form, or None.
+
+    A relative token is resolved against the OTHER process's cwd, never this server's. A cwd
+    that is missing, or not absolute here (a Windows `C:\\...` path read on POSIX), places
+    nothing: joining it onto our own cwd would turn "some launcher.py somewhere else" into a
+    path under whatever directory the server happens to run from.
+    """
+    try:
+        if os.path.isabs(token):
+            return os.path.normcase(os.path.abspath(token))
+        if cwd and os.path.isabs(cwd):
+            return os.path.normcase(os.path.abspath(os.path.join(cwd, token)))
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _same_directory(cwd, directory):
+    return bool(cwd) and os.path.isabs(cwd) and (
+        os.path.normcase(os.path.abspath(cwd)) == os.path.normcase(directory))
+
+
 def is_proxy_process(proc, child_argv=None):
     """Is this the launcher's proxy transport child (server/proxy/__main__.py)?
 
@@ -88,14 +112,14 @@ def is_proxy_process(proc, child_argv=None):
         cwd = None
     for i, token in enumerate(argv[1:], 1):
         if token == "-m" and argv[i + 1:i + 2] == ["server.proxy"]:
-            if cwd and os.path.normcase(os.path.abspath(cwd)) == os.path.normcase(_PROJECT_ROOT):
+            if _same_directory(cwd, _PROJECT_ROOT):
                 return True
             continue
         if not token.replace("\\", "/").lower().endswith("server/proxy/__main__.py"):
             continue
-        if not os.path.isabs(token) and not cwd:
+        resolved = _resolve_arg(cwd, token)
+        if resolved is None:
             continue
-        resolved = os.path.normcase(os.path.abspath(os.path.join(cwd or "", token)))
         if resolved == PROXY_ENTRY_PATH or "browserplug" in resolved.replace("\\", "/"):
             return True
     return False
@@ -146,10 +170,13 @@ def is_launcher_process(proc, child_argv=None):
     for token in argv:
         if not token.lower().replace("\\", "/").endswith("launcher.py"):
             continue
-        try:
-            resolved = os.path.normcase(os.path.abspath(os.path.join(cwd, token)))
-        except Exception:
+        resolved = _resolve_arg(cwd, token)
+        if resolved is None:
             continue
+        # The "browserplug" test is a heuristic: it recognises a launcher of ANOTHER
+        # checkout only when that checkout's directory carries the project name, so a copy
+        # cloned as `foxmcp` is missed. It matches the resolved path, never this server's
+        # cwd, which is why _resolve_arg refuses a cwd it cannot place.
         if resolved in (LAUNCHER_PATH, REAL_LAUNCHER_PATH) or "browserplug" in resolved.replace("\\", "/"):
             return True
     return False
@@ -159,8 +186,14 @@ def is_launcher_process(proc, child_argv=None):
 SHELL_WRAPPER_NAMES = frozenset({
     "cmd.exe", "cmd", "powershell.exe", "powershell", "pwsh.exe", "pwsh",
     "bash.exe", "bash", "sh.exe", "sh", "zsh.exe", "zsh", "wsl.exe",
+    "dash", "ksh", "fish",
 })
 SHELL_COMMAND_FLAGS = frozenset({"-c", "/c", "-command", "-encodedcommand", "-ec"})
+# Shells that take POSIX option clusters: `zsh -lc`, `bash -ilc` and `bash -cl` all mean "run
+# this command". The cluster rule is not applied to cmd or PowerShell, whose `-ExecutionPolicy`
+# also contains a "c". Same as launcher/client_pid.py.
+POSIX_SHELL_NAMES = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish"})
+_OPTION_CLUSTER = re.compile(r"-[a-z]+")
 # uv, when a client registers `uv run --script <checkout>/server/launcher.py`: it stays
 # resident between the client and the launcher's trampoline for the whole session. Same
 # names as launcher/client_pid.py (test_client_pid keeps them equal).
@@ -197,10 +230,21 @@ def is_shell_wrapper(proc):
         return False
     if not argv:
         return False
-    exe = os.path.basename(str(argv[0]).replace("\\", "/")).lower()
+    # A login shell is exec'd with a leading dash in argv[0] (`-zsh`).
+    exe = os.path.basename(str(argv[0]).replace("\\", "/")).lower().lstrip("-")
     if exe not in SHELL_WRAPPER_NAMES:
         return False
-    return any(str(tok).lower() in SHELL_COMMAND_FLAGS for tok in argv[1:])
+    return any(is_command_flag(exe, str(tok)) for tok in argv[1:])
+
+
+def is_command_flag(shell_name, token):
+    """Does `token` tell the shell `shell_name` to run a command rather than talk to a person?"""
+    token = token.lower()
+    if token in SHELL_COMMAND_FLAGS:
+        return True
+    stem = shell_name[:-4] if shell_name.endswith(".exe") else shell_name
+    return (stem in POSIX_SHELL_NAMES and _OPTION_CLUSTER.fullmatch(token) is not None
+            and "c" in token)
 
 
 def resolve_client_chain(peer_port):
@@ -649,14 +693,14 @@ def connected_browser_pids(ws_port):
         import psutil
         # ONE table for the whole report. The owner of each browser-side port is read from
         # this same snapshot; pid_for_local_port would scan the table again per socket.
-        table = psutil.net_connections(kind='inet')
+        table = socket_table.tcp_connections()
         owner = {}
         for c in table:
-            if c.laddr and c.pid and c.status == psutil.CONN_ESTABLISHED:
+            if c.laddr and c.pid and c.status == socket_table.CONN_ESTABLISHED:
                 owner.setdefault(c.laddr.port, c.pid)
         for c in table:
             if (c.laddr and c.laddr.port == ws_port and c.raddr
-                    and c.status == psutil.CONN_ESTABLISHED):
+                    and c.status == socket_table.CONN_ESTABLISHED):
                 pid = owner.get(c.raddr.port)
                 if not pid:
                     continue
@@ -676,6 +720,23 @@ def connected_browser_pids(ws_port):
 
 
 # ---- Browser identity probe (local browsers; display enrichment only) --------
+
+def _same_browser_process(child, parent):
+    """Is `parent` another process of the browser `child` belongs to?
+
+    Same process stem (Windows and Linux, and a Chromium helper under its main process on a
+    Mac), or both executables inside one macOS `.app` bundle, which is how Firefox's
+    `plugin-container` and other differently named helpers reach their main process."""
+    if browser_identity.process_stem(parent.name()) == browser_identity.process_stem(child.name()):
+        return True
+    try:
+        child_exe, parent_exe = child.exe(), parent.exe()
+    except Exception:
+        return False
+    bundle = mac_bundle.outermost_bundle(child_exe)
+    return bool(bundle) and bundle == mac_bundle.outermost_bundle(parent_exe) and (
+        child_exe.replace("\\", "/")[len(bundle):].startswith("/Contents/"))
+
 
 def browser_instance_identity(socket_pid):
     """Resolve a WS-socket-owning PID to its browser INSTANCE identity (Firefox or
@@ -702,7 +763,8 @@ def browser_instance_identity(socket_pid):
                 par = None
             # Climb only through the SAME executable: a browser's parent process is
             # its own launcher, never another app (Firefox's parent is explorer.exe).
-            if par and browser_identity.process_stem(par.name()) == browser_identity.process_stem(top.name()):
+            # On macOS a helper in the same .app bundle counts as well.
+            if par and _same_browser_process(p, par):
                 p = par
                 top = par
                 hops += 1

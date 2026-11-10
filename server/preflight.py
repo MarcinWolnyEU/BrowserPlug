@@ -75,7 +75,7 @@ for _path in (os.path.join(_ROOT, "shared-py"), _ROOT):
 # walk exactly the sequence launcher.py walks, and holding the module makes that
 # reuse obvious (and monkeypatchable in tests). The bootstrap above makes the same
 # absolute imports work as a script and as part of the `server` package.
-from browserplug_shared import mcp_port, server_env
+from browserplug_shared import mcp_port, server_env, socket_table
 # The one definition of "this machine" (stdlib-only, so the doctor stays importable).
 from server.ws import http_auth
 
@@ -162,10 +162,23 @@ _RELOAD_EXTENSION = ("reload the extension (about:addons ▸ BrowserPlug ▸ Rel
 # to one client does not make the others see it). `key` is the top-level object the
 # servers live under; the parsers try all of them per file, because a hand-edited
 # config often uses the neighbouring client's spelling.
+#
+# The base keys: `root` is the checkout, `home` the user's home, `cwd` the working directory.
+# `appdata` is the per-user application-data folder: %APPDATA% on Windows,
+# ~/Library/Application Support on macOS, $XDG_CONFIG_HOME (else ~/.config) elsewhere.
+# `winappdata` is %APPDATA% alone, for a file only Windows uses; `posixhome` is the home
+# folder on Linux and macOS alone, for a file Windows never reads; `xdg` and `glab` are the
+# folders $XDG_CONFIG_HOME and $GLAB_CONFIG_DIR name, present only when that variable is set.
 _CLIENT_CONFIGS = (
     ("Kilo CLI", "root", "kilo.json"),
     ("VS Code / GitHub Copilot", "appdata", os.path.join("Code", "User", "mcp.json")),
-    ("GitLab Duo", "appdata", os.path.join("GitLab", "duo", "mcp.json")),
+    ("GitLab Duo", "winappdata", os.path.join("GitLab", "duo", "mcp.json")),
+    # GitLab's docs (GitLab Duo CLI and JetBrains): ~/.gitlab/duo/mcp.json on Linux and macOS,
+    # %APPDATA%\GitLab\duo\mcp.json on Windows, and under $GLAB_CONFIG_DIR/duo or
+    # $XDG_CONFIG_HOME/gitlab/duo when either is set, on any OS.
+    ("GitLab Duo", "posixhome", os.path.join(".gitlab", "duo", "mcp.json")),
+    ("GitLab Duo", "xdg", os.path.join("gitlab", "duo", "mcp.json")),
+    ("GitLab Duo", "glab", os.path.join("duo", "mcp.json")),
     ("Claude Code", "home", ".claude.json"),
     ("Claude Code (project .mcp.json)", "root", ".mcp.json"),
     ("Claude Code (project .mcp.json)", "cwd", ".mcp.json"),
@@ -180,6 +193,8 @@ _EXTRA_CLIENT_CONFIGS = (
     ("Mistral Vibe", "home", os.path.join(".vibe", "config.toml")),
     ("Mistral Vibe", "home", os.path.join(".vibe", "mcp.json")),
     ("Reasonix", "root", "reasonix.toml"),
+    # Claude Desktop: %APPDATA%\Claude on Windows, ~/Library/Application Support/Claude on macOS.
+    ("Claude Desktop", "appdata", os.path.join("Claude", "claude_desktop_config.json")),
 )
 # The server tables of a TOML config: Codex's [mcp_servers.<name>], Mistral Vibe's
 # [[mcp_servers]] and Reasonix's [[plugins]].
@@ -521,16 +536,21 @@ def _looks_like_ours(cmdline) -> bool:
 
 def _listeners(ports) -> dict:
     """{port: {pid, name, cmdline, parent_pid, parent_cmdline}} for TCP listeners on
-    `ports`, via psutil when it imports. psutil is optional here on purpose: its absence
-    is one of the things the doctor diagnoses, so any failure yields an empty map."""
+    `ports`. The table is psutil's, or on macOS (where psutil is refused the system-wide
+    table) the one socket_table reads for the user's own processes; the process details
+    need psutil. psutil is optional here on purpose: its absence is one of the things the
+    doctor diagnoses, so any failure yields an empty map."""
     found: dict = {}
     try:
         # importlib, not an import statement: test_module_imports_nothing_that_could_be_missing
         # guards the module's top level, and this one sits inside a try by design.
-        psutil = importlib.import_module("psutil")
+        try:
+            psutil = importlib.import_module("psutil")
+        except ImportError:
+            psutil = None
         wanted = set(ports)
-        for conn in psutil.net_connections(kind="tcp"):
-            if conn.status != psutil.CONN_LISTEN or not conn.laddr:
+        for conn in socket_table.tcp_connections():
+            if conn.status != socket_table.CONN_LISTEN or not conn.laddr:
                 continue
             if conn.laddr.port not in wanted or conn.pid is None:
                 continue
@@ -602,7 +622,9 @@ def _wedged_remedy(holders) -> str:
             target = h["parent_pid"] if parent_ours else h["pid"]
             break
     if target is None:
-        return ("find the process holding the port (netstat -ano) and end it, then let an "
+        find = ("netstat -ano" if os.name == "nt" else
+                f"lsof -nP -iTCP:{holders[0]['port']} -sTCP:LISTEN" if holders else "lsof -nP -iTCP -sTCP:LISTEN")
+        return (f"find the process holding the port ({find}) and end it, then let an "
                 "MCP client's launcher respawn the server; do not start a second one")
     kill = f"taskkill /PID {target} /T /F" if os.name == "nt" else f"kill -9 {target}"
     return (f"end the wedged server, which cannot answer /shutdown or /restart: {kill}. "
@@ -610,7 +632,33 @@ def _wedged_remedy(holders) -> str:
             f"another while it lives")
 
 
-def collect_client_configs(root: str | None = None, env=None) -> list:
+def _config_bases(root: str, env, platform: str | None = None) -> dict:
+    """The directories _CLIENT_CONFIGS and _EXTRA_CLIENT_CONFIGS are relative to, by base key.
+
+    An explicit APPDATA wins on any platform (Windows always has it; a POSIX host has it only
+    when something set it, and then it is meant). Otherwise the per-user application-data
+    folder is the platform's own: macOS keeps it under ~/Library/Application Support, Linux
+    and the BSDs under $XDG_CONFIG_HOME or ~/.config.
+    """
+    platform = platform or sys.platform
+    home = env.get("USERPROFILE") or env.get("HOME") or os.path.expanduser("~")
+    appdata = env.get("APPDATA") or ""
+    if not appdata and not platform.startswith("win"):
+        if platform == "darwin":
+            appdata = os.path.join(home, "Library", "Application Support")
+        else:
+            appdata = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = ""
+    return {"root": root, "appdata": appdata, "winappdata": env.get("APPDATA") or "",
+            "home": home, "posixhome": "" if platform.startswith("win") else home, "cwd": cwd, "xdg": env.get("XDG_CONFIG_HOME") or "",
+            "glab": env.get("GLAB_CONFIG_DIR") or ""}
+
+
+def collect_client_configs(root: str | None = None, env=None,
+                           platform: str | None = None) -> list:
     """Every MCP client registry we know the path of, parsed and path-checked.
 
     Each client keeps its own config (see the table in docs/mcp-clients.md), so "it works in
@@ -620,13 +668,7 @@ def collect_client_configs(root: str | None = None, env=None) -> list:
     """
     root = root or repo_root()
     env = os.environ if env is None else env
-    appdata = env.get("APPDATA") or ""
-    home = env.get("USERPROFILE") or env.get("HOME") or os.path.expanduser("~")
-    try:
-        cwd = os.getcwd()
-    except OSError:
-        cwd = ""
-    bases = {"root": root, "appdata": appdata, "home": home, "cwd": cwd}
+    bases = _config_bases(root, env, platform)
 
     records = []
     seen = set()
@@ -682,8 +724,40 @@ def _entry_record(name, key, project, entry: dict, root: str | None):
         "paths": paths,
         # Only ABSOLUTE paths are checkable: "python" or "npx" resolve through
         # PATH at spawn time and their absence is not this file's fault.
-        "missing_paths": [p for p in paths if os.path.isabs(p) and not os.path.exists(p)],
+        "missing_paths": [p for p in paths if _is_absolute_path(p) and not os.path.exists(p)],
     }
+
+
+_WINDOWS_ABSOLUTE = re.compile(r"[A-Za-z]:[\\/]|\\\\")
+
+
+def _is_windows_form(path: str) -> bool:
+    """A drive path (`C:\\x`, `C:/x`) or a UNC path (`\\\\host\\share`)."""
+    return _WINDOWS_ABSOLUTE.match(path) is not None
+
+
+def _is_absolute_path(path: str) -> bool:
+    """Absolute on this host, or in Windows form on any host.
+
+    On POSIX `os.path.isabs("C:\\gone\\python.exe")` is False, so a config copied from a
+    Windows machine passed the path check although its client cannot start `C:\\...` there.
+    Such a path cannot exist on a POSIX host, so it is reported as missing: the config is
+    broken here, and the finding says why (`_foreign_form_note`).
+    """
+    return os.path.isabs(path) or _is_windows_form(path)
+
+
+def _foreign_form_note(missing: list, windows_host: bool | None = None) -> str:
+    """When this host is not Windows and a missing path is in Windows form, the sentence that
+    says so; else ''. The usual cause is a config file copied or synced from a Windows machine,
+    which no edit of a prefix repairs, because the layout differs too (`Scripts\\python.exe`
+    against `bin/python`)."""
+    if windows_host is None:
+        windows_host = os.name == "nt"
+    if windows_host or not any(_is_windows_form(str(p)) for p in missing):
+        return ""
+    return (". A Windows path cannot exist on this machine: this config was written for "
+            "Windows, so register BrowserPlug again here with this machine's own paths")
 
 
 def _new_record(client: str, path: str) -> dict:
@@ -872,12 +946,7 @@ def collect_venv_references(root: str | None = None, env=None) -> list:
     """
     root = root or repo_root()
     env = os.environ if env is None else env
-    home = env.get("USERPROFILE") or env.get("HOME") or os.path.expanduser("~")
-    try:
-        cwd = os.getcwd()
-    except OSError:
-        cwd = ""
-    bases = {"root": root, "appdata": env.get("APPDATA") or "", "home": home, "cwd": cwd}
+    bases = _config_bases(root, env)
     found, seen = [], set()
     for client, base_key, relative in _VENV_SCAN_CONFIGS:
         base = bases.get(base_key)
@@ -1234,11 +1303,15 @@ def _inside(path: str, root: str) -> bool:
 # writes `local`).
 _STDIO_TRANSPORTS = ("stdio", "local")
 
-# What a `uv run --script` registration costs per open client, measured on Windows 11
-# (.tmp/ research, 2026-10-01): uv.exe stays resident for the session, beside the script
-# environment's trampoline.
-_UV_RUN_COST = ("each open client keeps a uv.exe resident (about 20 MB RSS and 40 MB commit) "
+def _uv_run_cost() -> str:
+    """What a `uv run --script` registration costs per open client. The figures were measured
+    on Windows 11 (.tmp/ research, 2026-10-01): uv.exe stays resident for the session, beside
+    the script environment's trampoline. uv stays resident on macOS and Linux too (it does not
+    exec the script), but nothing was measured there, so no numbers are quoted."""
+    if os.name == "nt":
+        return ("each open client keeps a uv.exe resident (about 20 MB RSS and 40 MB commit) "
                 "plus a trampoline")
+    return "each open client keeps a uv process resident beside the launcher"
 
 
 def _registration(root: str, uv: str | None, launcher=None) -> str:
@@ -1247,8 +1320,9 @@ def _registration(root: str, uv: str | None, launcher=None) -> str:
     `launcher` is server_env.launcher_python's (python, why). With a python, uv's
     minor-version link interpreter runs the launcher directly. Without one, uv by its
     absolute path (server_env.find_uv), plus `why`, which says how to get the interpreter.
-    A bare `uv` is resolved by the client, and a Windows client can resolve it to a uv.exe
-    in the project directory it was opened in."""
+    A bare `uv` is resolved by the client: a Windows client can resolve it to a uv.exe in the
+    project directory it was opened in, and a macOS or Linux client started from the desktop
+    rather than a terminal may not have uv's folder on its PATH at all."""
     path = os.path.join(root, "server", "launcher.py")
     python, why = launcher if launcher else (None, None)
     if python:
@@ -1258,10 +1332,13 @@ def _registration(root: str, uv: str | None, launcher=None) -> str:
             f"`--script`, the launcher path)")
     if not uv:
         text += ("; once uv is installed, name it by its full path rather than a bare `uv`, "
-                 "which a Windows client may resolve to a uv.exe in the folder it was "
-                 "opened in")
+                 + ("which a Windows client may resolve to a uv.exe in the folder it was "
+                    "opened in" if os.name == "nt" else
+                    "which a client started from the desktop rather than a terminal may "
+                    "not find on its PATH"))
     elif why:
-        text += (f"; that form keeps a uv.exe resident per client, and uv's own Python runs "
+        text += (f"; that form keeps a {'uv.exe' if os.name == 'nt' else 'uv process'} "
+                 f"resident per client, and uv's own Python runs "
                  f"the launcher with less ({why}, then register that interpreter with the "
                  f"launcher path as its argument)")
     # Without a uv interpreter to name, the README's venv route is the way that needs no uv.
@@ -1335,7 +1412,7 @@ def _registration_notes(declaring: list, root: str, uv: str | None, launcher) ->
     notes, remedy = "", None
     if uv_run:
         notes += (f". {len(uv_run)} of them start the launcher with `uv run --script` "
-                  f"({'; '.join(uv_run)}): {_UV_RUN_COST}, where the interpreter form runs "
+                  f"({'; '.join(uv_run)}): {_uv_run_cost()}, where the interpreter form runs "
                   f"two processes and no uv")
         python, why = launcher if launcher else (None, None)
         remedy = (f"register {_registration(root, uv, launcher)} instead, then restart each "
@@ -1405,9 +1482,8 @@ def check_client_config(records: list, state: dict | None = None,
         return _venv_reference_check(venv_refs, root, uv, launcher)
     if not records:
         return _check("client_config", None,
-                      "no MCP client config found at any known path (kilo.json, "
-                      "%APPDATA%\\Code\\User\\mcp.json, %APPDATA%\\GitLab\\duo\\mcp.json, "
-                      "~/.claude.json) — this client may keep its registry elsewhere; "
+                      f"no MCP client config found at any known path ({_known_config_paths()}) "
+                      "— this client may keep its registry elsewhere; "
                       "each MCP client has its OWN, and adding BrowserPlug to one does not "
                       "register it with the others")
 
@@ -1445,7 +1521,7 @@ def check_client_config(records: list, state: dict | None = None,
                       f"written on another box, or the interpreter or virtualenv it names "
                       f"was removed. The client reports this as a spawn failure (on Windows, "
                       f"\"spawn <cmd> ENOENT\"), which names the command rather than the "
-                      f"missing path",
+                      f"missing path{_foreign_form_note(entry['missing_paths'])}",
                       _missing_remedy(record, entry["missing_paths"],
                                       server_env.server_python_minors(root) if root else [])
                       or f"edit {record['path']} so every absolute path resolves here, then "
@@ -1513,6 +1589,19 @@ def check_client_config(records: list, state: dict | None = None,
     return _check("client_config", True,
                   f"declared by {summary}; every absolute path in them exists here{notes}",
                   better)
+
+
+def _known_config_paths(platform: str | None = None) -> str:
+    """The client config files this host looks for, as the "no MCP client config found" text
+    names them."""
+    platform = platform or sys.platform
+    if platform.startswith("win"):
+        return ("kilo.json, %APPDATA%\\Code\\User\\mcp.json, %APPDATA%\\GitLab\\duo\\mcp.json, "
+                "~/.claude.json, %APPDATA%\\Claude\\claude_desktop_config.json")
+    app = ("~/Library/Application Support" if platform == "darwin"
+           else "$XDG_CONFIG_HOME or ~/.config")
+    return (f"kilo.json, {app}/Code/User/mcp.json, ~/.gitlab/duo/mcp.json, ~/.claude.json, "
+            f"{app}/Claude/claude_desktop_config.json")
 
 
 def _wants_registration(configs: list, venv_refs: list, root: str | None = None) -> bool:

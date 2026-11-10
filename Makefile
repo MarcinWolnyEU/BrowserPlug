@@ -2,7 +2,13 @@
 # Build and manage the browser extension and Python server
 
 # Variables
+# macOS: only Developer Edition and Nightly load the unsigned test XPI, and a bare `firefox`
+# is on no PATH there, so the harness would skip the whole Firefox half without saying why.
+ifeq ($(shell uname -s),Darwin)
+FIREFOX_PATH ?= /Applications/Firefox Developer Edition.app/Contents/MacOS/firefox
+else
 FIREFOX_PATH ?= firefox
+endif
 
 # Every Python command goes through uv. The server's dependencies live in the PEP 723 block
 # of server/server.py (locked in server/server.py.lock); the test tools in tests/run.py
@@ -110,15 +116,15 @@ test: run-tests test-js
 
 run-tests: build
 	@echo "Running all tests..."
-	FIREFOX_PATH=$(FIREFOX_PATH) $(RUN_TESTS) unit/ parity/ integration/
+	FIREFOX_PATH="$(FIREFOX_PATH)" $(RUN_TESTS) unit/ parity/ integration/
 
 test-unit:
 	@echo "Running unit tests..."
-	FIREFOX_PATH=$(FIREFOX_PATH) $(RUN_TESTS) unit/
+	FIREFOX_PATH="$(FIREFOX_PATH)" $(RUN_TESTS) unit/
 
 test-integration: build
 	@echo "Running integration tests..."
-	FIREFOX_PATH=$(FIREFOX_PATH) $(RUN_TESTS) integration/
+	FIREFOX_PATH="$(FIREFOX_PATH)" $(RUN_TESTS) integration/
 
 # Gecko<->Chromium parity validator (ArchUnit-style, stdlib only, no browser)
 test-parity:

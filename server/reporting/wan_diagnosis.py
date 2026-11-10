@@ -27,6 +27,8 @@ import platform
 import sys
 import time
 
+from browserplug_shared import socket_table
+
 logger = logging.getLogger(__name__)
 
 WINDOWS_DIAG_TIMEOUT_SECONDS = 5
@@ -283,18 +285,19 @@ def firewall_verdict(rules, active_networks, ports):
 
 
 def _wan_listening_detail(ws_port):
-    """OS-level confirmation a LISTEN socket on ws_port belongs to THIS process: the same
-    psutil.net_connections()-filtered-by-pid idiom server.py already uses elsewhere for
-    connection diagnostics, not just trusting that our own bind() succeeded.
+    """OS-level confirmation a LISTEN socket on ws_port belongs to THIS process: the
+    connection table filtered by pid, the idiom server.py uses elsewhere for connection
+    diagnostics, not just trusting that our own bind() succeeded. On macOS, where psutil
+    cannot read the system-wide table without root, the table is this process's own
+    sockets (socket_table).
 
-    Returns (ok, detail): ok is True/False/None (None = couldn't verify, e.g. psutil
-    threw), detail is a human-readable string either way.
+    Returns (ok, detail): ok is True/False/None (None = couldn't verify, e.g. the table
+    could not be read), detail is a human-readable string either way.
     """
     try:
-        import psutil
         pid = os.getpid()
-        for c in psutil.net_connections(kind='inet'):
-            if (c.pid == pid and c.status == psutil.CONN_LISTEN
+        for c in socket_table.tcp_connections(only_pid=pid):
+            if (c.pid == pid and c.status == socket_table.CONN_LISTEN
                     and c.laddr and c.laddr.port == ws_port):
                 return True, f"{c.laddr.ip}:{c.laddr.port} LISTEN (pid {pid})"
         return False, f"no LISTEN socket found for port {ws_port} on this process"
@@ -368,7 +371,8 @@ async def diagnose_wan_reachability(ws_port, ws_host, mcp_port=None, lan_rows=()
     if mcp_port:
         ports.append({"port": mcp_port, "label": "the options page's HTTP port"})
 
-    listening_ok, listening_detail = _wan_listening_detail(ws_port)
+    # The table read is blocking, and on macOS it opens the process's descriptors.
+    listening_ok, listening_detail = await asyncio.to_thread(_wan_listening_detail, ws_port)
     windows = await _windows_wan_diagnostics(ports)
     lan_ip = lan_rows[0]["ip"] if lan_rows else None
     host_bind_ok = ws_host in ("0.0.0.0", "::")

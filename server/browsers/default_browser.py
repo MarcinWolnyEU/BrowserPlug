@@ -30,10 +30,12 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
 import time
 
 from browserplug_shared.config_store import read_section, write_section
 from browserplug_shared.mcp_port import detached_spawn_kwargs
+from server.browsers import mac_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,9 @@ LAUNCH_WAIT_MAX = 90.0
 LAUNCH_RETRY_COOLDOWN_SECONDS = 60.0
 
 _POLL_INTERVAL_SECONDS = 0.25
+
+# How long to wait for `open` itself (macOS) to report that it handed the start over.
+_OPEN_WAIT_SECONDS = 15.0
 
 
 def defaults():
@@ -340,9 +345,19 @@ def launch_command(settings):
     exe = settings.get("exe_path")
     if not exe:
         return None, "the server does not know which program to run"
+    if sys.platform == "darwin":
+        # A browser seen running from Chrome's temporary code-signing clone is started from
+        # its installed copy.
+        exe = mac_bundle.installed_executable(exe) or exe
     if not os.path.exists(exe):
         return None, f"the program is no longer at {exe}"
-    return [exe] + split_launch_args(settings.get("launch_args")), None
+    args = split_launch_args(settings.get("launch_args"))
+    if sys.platform == "darwin":
+        # A Mac browser starts through LaunchServices (`open`), not as a bare executable.
+        via_open = mac_bundle.open_argv(exe, args)
+        if via_open:
+            return via_open, None
+    return [exe] + args, None
 
 
 class LaunchGuard:
@@ -391,8 +406,7 @@ class LaunchGuard:
             try:
                 # Popen on Windows takes tens of ms (CreateProcess); off the loop so other
                 # clients' tool calls and /health are not stalled while it runs.
-                await asyncio.to_thread(
-                    lambda: subprocess.Popen(argv, close_fds=True, **detached_spawn_kwargs()))
+                await asyncio.to_thread(_start, argv)
             except OSError as e:
                 logger.warning("Could not start %s: %s", argv[0], e)
                 self.note_failure()
@@ -413,6 +427,20 @@ class LaunchGuard:
                            settings.get("name") or argv[0], launch_wait_seconds())
             self.note_failure()
             return None
+
+
+def _start(argv):
+    """Start the browser. `open` returns as soon as LaunchServices has the request, so its
+    exit status is the one fact about the start that is available at once; a failure there
+    (no such bundle, a bundle macOS refuses to run) is raised like any failed spawn."""
+    proc = subprocess.Popen(argv, close_fds=True, **detached_spawn_kwargs())
+    if argv and argv[0] == mac_bundle.OPEN:
+        try:
+            status = proc.wait(timeout=_OPEN_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return      # still handing over; the connect wait below is the judge
+        if status:
+            raise OSError(f"open exited with status {status}")
 
 
 def _live(server):

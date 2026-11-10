@@ -12,6 +12,7 @@ import types
 
 import pytest
 
+from browserplug_shared import socket_table
 from server.reporting import client_identity
 from server.server import BrowserPlugServer
 
@@ -53,6 +54,8 @@ def procs(monkeypatch):
 
     monkeypatch.setattr(client_identity, "pid_for_local_port", pid_for_port)
     monkeypatch.setattr("server.web.peer_owner._server_owner", None)  # the once-read cache
+    # The gate skips its lookup where the table cannot show another user (macOS, non-root).
+    monkeypatch.setattr(socket_table, "sees_other_users", lambda: True)
     fake_psutil = types.SimpleNamespace(
         Process=lambda pid=None: FakeProc(pid),
         AccessDenied=type("AccessDenied", (Exception,), {}),
@@ -152,3 +155,27 @@ def test_the_decision_function_directly(procs):
     procs.owners[1] = ME
     assert peer_owner.resolve_peer(7)[0] is False
     assert peer_owner.resolve_peer(None)[0] is False
+
+
+@pytest.mark.asyncio
+async def test_where_the_table_cannot_show_another_user_no_table_is_read(procs, monkeypatch):
+    """macOS without root: the table holds this user's sockets only, so the gate keeps its
+    fail-open verdict and never walks it, however many fresh ports come in."""
+    monkeypatch.setattr(socket_table, "sees_other_users", lambda: False)
+    procs.ports[50010] = 910
+    procs.owners[910] = OTHER           # would be refused if anything looked
+    app = _app([])
+    for port in (50010, 50011, 50012):
+        status, _ = await _get(app, "/mcp", ("127.0.0.1", port))
+        assert status == 200
+    assert procs.lookups == []
+
+
+def test_the_decision_function_skips_the_lookup_when_the_table_is_own_user_only(
+        procs, monkeypatch):
+    from server.web import peer_owner
+    monkeypatch.setattr(socket_table, "sees_other_users", lambda: False)
+    procs.ports[8] = 2
+    procs.owners[2] = OTHER
+    assert peer_owner.resolve_peer(8) == (False, None)
+    assert procs.lookups == []

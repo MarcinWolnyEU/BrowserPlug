@@ -136,6 +136,10 @@ approved, install from source. You need Git, **Python 3.11+** (the server runs o
 3.12), and Firefox Developer Edition 140+ or Chrome, Edge or Brave 138+.
 [docs/install.md](docs/install.md) has the details and the uv alternative.
 
+Windows and macOS are the tested platforms. The macOS runs were on macOS 27 on Apple Silicon,
+with Firefox Developer Edition and Chrome for Testing or Chrome Canary. The test suite does
+not cover Linux (only the Tor bundle has a Linux container test), so treat Linux as untested.
+
 ### 1. Get the code and set up Python
 
 Clone the repository and install the server's dependencies into a venv outside the checkout:

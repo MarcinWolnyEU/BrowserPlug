@@ -61,8 +61,10 @@ jobs:
       - name: Lint workflows
         run: uvx --from actionlint-py==1.7.12.25 actionlint
 
-  # Windows only: the dev box is Windows and the server runs there under two processes
-  # (AGENTS.md, "How it runs"). The suite is unverified on Linux, so no Linux cell yet.
+  # Windows and macOS run the unit and parity suite. The dev box is Windows and the server runs
+  # there under two processes (AGENTS.md, "How it runs"); the macOS job covers the BSD socket
+  # stack, the libproc readers and the Mac browser handling. The suite is unverified on Linux,
+  # so no Linux cell yet.
   unit:
     name: Unit and parity tests (Windows)
     runs-on: windows-latest
@@ -92,6 +94,37 @@ jobs:
       - name: Unit and parity suites
         env:
           # test_server_env checks uv's own Python layout, not the runner image's toolcache copy.
+          UV_PYTHON_PREFERENCE: only-managed
+        run: uv run --locked --script tests/run.py -q
+
+  # arm64 (macos-15). The suite takes about 8 minutes on an M2; the timeout leaves generous room
+  # for a slower hosted runner.
+  unit-macos:
+    name: Unit and parity tests (macOS)
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.18"
+          python-version: "3.12"
+      # test_ws_crypto_interop drives Node's native ML-KEM, so it needs the same Node as `static`.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - name: Unit and parity suites
+        env:
+          # The golden files hold epoch values computed in Central Europe. The Windows job sets
+          # the system zone with tzutil; here the variable does the same for the test process
+          # and everything it spawns.
+          TZ: Europe/Warsaw
+          # test_server_env checks uv's own Python layout, not a Homebrew or toolcache copy.
           UV_PYTHON_PREFERENCE: only-managed
         run: uv run --locked --script tests/run.py -q
 
@@ -152,7 +185,7 @@ jobs:
   ci-ok:
     name: CI passed
     if: always()
-    needs: [static, unit, build]
+    needs: [static, unit, unit-macos, build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BrowserPlug",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Browser extension that exposes data and functions to MCP clients via WebSocket",
   "homepage_url": "https://github.com/MarcinWolnyEU/browserplug",
   "default_locale": "en",

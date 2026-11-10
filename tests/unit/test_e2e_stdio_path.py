@@ -378,9 +378,14 @@ def forget_server_sessions():
     """What a /restart does to the MCP sessions: the server no longer knows any of them.
     Returns the session manager, so a test can count the sessions created afterwards."""
     import gc
+    import weakref
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    managers = [o for o in gc.get_objects() if isinstance(o, StreamableHTTPSessionManager)
-                and o._server_instances]
+    # gc lists every object, dead weakref proxies included, and isinstance() on a proxy whose
+    # referent is gone raises ReferenceError (it reads the proxy's __class__). Proxies are
+    # never the manager, which is the object itself.
+    managers = [o for o in gc.get_objects()
+                if not isinstance(o, weakref.ProxyTypes)
+                and isinstance(o, StreamableHTTPSessionManager) and o._server_instances]
     assert len(managers) == 1, "expected the one live session manager"
     manager = managers[0]
     manager._server_instances.clear()

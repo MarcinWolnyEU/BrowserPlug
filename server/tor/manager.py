@@ -13,6 +13,7 @@ has the contract and the platform notes.
 import atexit
 import collections
 import errno
+import http.client
 import logging
 import os
 import shutil
@@ -21,6 +22,7 @@ import subprocess
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.request
 
 from server.tor import bundle as tor_bundle
@@ -34,7 +36,12 @@ TOR_HOME_ENV = "BROWSERPLUG_TOR_HOME"
 DEFAULT_HOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime")
 
 DOWNLOAD_TIMEOUT_SECONDS = 60
-# A cold start fetches the consensus and descriptors: about 33 s measured on Windows.
+# The bundle host sometimes closes the connection early and urllib hands back the short
+# body without raising, so a download is checked against Content-Length and retried.
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_BACKOFF_SECONDS = 2
+# A cold start fetches the consensus and descriptors: about 33 s measured on Windows,
+# 162 s once on an Apple M2.
 BOOTSTRAP_TIMEOUT_SECONDS = 180
 BOOTSTRAP_DONE = "Bootstrapped 100%"
 START_ATTEMPTS = 3
@@ -127,17 +134,41 @@ class TorManager:
         log.info("installed Tor %s into %s", bundle.version, target)
 
     def _download(self, bundle, destination):
+        """Fetch the archive, retrying a short or interrupted transfer. The SHA-256 check
+        stays the final authority on what was received."""
+        failure = None
+        for attempt in range(DOWNLOAD_ATTEMPTS):
+            if attempt:
+                time.sleep(DOWNLOAD_BACKOFF_SECONDS * attempt)
+            try:
+                self._fetch(bundle, destination)
+                break
+            except TorError as exc:
+                failure = exc
+                log.warning("Tor bundle download attempt %d of %d failed: %s",
+                            attempt + 1, DOWNLOAD_ATTEMPTS, exc)
+        else:
+            raise failure
+        got = tor_bundle.sha256_of(destination)
+        if got != bundle.sha256:
+            raise TorError(f"The Tor bundle from {bundle.url} has SHA-256 {got}, expected "
+                           f"{bundle.sha256}. It was not unpacked or run.")
+
+    def _fetch(self, bundle, destination):
         log.info("downloading %s", bundle.url)
         try:
             with self._opener(bundle.url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response, \
                     open(destination, "wb") as out:
                 shutil.copyfileobj(response, out)
-        except OSError as exc:
+                headers = getattr(response, "headers", None)
+                declared = headers.get("Content-Length") if headers is not None else None
+        except (OSError, http.client.HTTPException) as exc:
             raise TorError(f"Could not download the Tor bundle from {bundle.url}: {exc}") from exc
-        got = tor_bundle.sha256_of(destination)
-        if got != bundle.sha256:
-            raise TorError(f"The Tor bundle from {bundle.url} has SHA-256 {got}, expected "
-                           f"{bundle.sha256}. It was not unpacked or run.")
+        if declared is not None and declared.isdigit():
+            received = os.path.getsize(destination)
+            if received != int(declared):
+                raise TorError(f"Short download of the Tor bundle from {bundle.url}: received "
+                               f"{received} of {declared} bytes.")
 
     @staticmethod
     def _unpack(archive_path, destination):
@@ -155,8 +186,9 @@ class TorManager:
     @staticmethod
     def _sign_for_apple_silicon(unpacked):
         """The macOS arm64 binaries in the bundle carry no code signature, and arm64 macOS
-        kills an unsigned binary on exec. An ad-hoc signature is enough. Untested on
-        Apple hardware (.tmp/dev-docs/tor.md)."""
+        kills an unsigned binary on exec. An ad-hoc signature is enough. Verified on arm64
+        (macOS 27.0.1, Apple M2, 2026-11-10); x86_64 is unverified (no Rosetta on the
+        test box). See .tmp/dev-docs/tor.md."""
         folder = os.path.join(unpacked, "tor")
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from test_config import FIREFOX_TEST_CONFIG, get_firefox_test_port
 from port_coordinator import FirefoxPortCoordinator, coordinated_mcp_port
+from browser_procs import group_popen_kwargs, stop_process_group
 
 project_root = Path(__file__).resolve().parent.parent
 
@@ -46,16 +47,18 @@ def _stop_firefox_tree(proc, profile_dir, exe_name, timeout=5):
     the browser as a new process, so the one we started may already be gone while the real
     browser keeps parent.lock: the profile then cannot be cached, and the next Firefox
     cannot use it. taskkill /T takes the tree down while the parent lives; the profile
-    sweep catches whatever the tree no longer reaches."""
+    sweep catches whatever the tree no longer reaches.
+
+    On POSIX the browser starts in its own process group (group_popen_kwargs), and the
+    whole group is stopped: SIGTERM, a wait, then SIGKILL for what is left."""
     forced = False
-    if proc is not None:
+    if proc is not None and os.name != 'nt':
+        forced = stop_process_group(proc, timeout=timeout)
+    elif proc is not None:
         try:
             if proc.poll() is None:
-                if os.name == 'nt':
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    proc.terminate()
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -69,7 +72,10 @@ def _kill_profile_stragglers(profile_dir, exe_name, timeout=5):
     """Kill every `exe_name` process whose command line runs it on `profile_dir`.
 
     Matched by process name, a -profile flag and the profile's unique temp-dir name, so a
-    browser the user runs themselves can never match."""
+    browser the user runs themselves can never match. The name is whatever the OS reports,
+    or the file name the process was started under: on macOS psutil's name() is the
+    kernel's short command name (16 characters, symlinks followed), which need not be the
+    file name the binary was started as."""
     if not profile_dir or not exe_name:
         return
     try:
@@ -79,11 +85,14 @@ def _kill_profile_stragglers(profile_dir, exe_name, timeout=5):
     marker = os.path.basename(os.path.normpath(profile_dir)).lower()
     victims = []
     for p in psutil.process_iter(['name']):
-        if os.path.splitext(p.info.get('name') or '')[0].lower() != exe_name:
-            continue
+        named = os.path.splitext(p.info.get('name') or '')[0].lower() == exe_name
+        if not named and os.name == 'nt':
+            continue   # Windows reports the image name; reading every command line is slow
         try:
             cmd = [str(a).lower() for a in p.cmdline()]
         except psutil.Error:
+            continue
+        if not named and not (cmd and _exe_name(cmd[0]) == exe_name):
             continue
         if ('-profile' in cmd or '--profile' in cmd) and any(marker in a for a in cmd):
             victims.append(p)
@@ -1075,7 +1084,8 @@ user_pref("extensions.browserplug.testPort", ''' + str(self.test_port) + ''');
             proc = subprocess.Popen(
                 firefox_cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                **group_popen_kwargs()
             )
 
             # Wait for extensions.json to be created (up to 20 seconds)
@@ -1194,7 +1204,8 @@ user_pref("extensions.browserplug.testPort", ''' + str(self.test_port) + ''');
             self.firefox_process = subprocess.Popen(
                 firefox_cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                **group_popen_kwargs()
             )
 
             if wait_for_startup:

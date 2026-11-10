@@ -43,6 +43,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       const info = await browser.runtime.getPlatformInfo();
       isMobile = !!(info && info.os === 'android');
       if (isMobile) document.body.classList.add('mobile');
+      // The file:// paragraph names the keystroke that opens a file: Cmd+O on a Mac.
+      const shortcut = document.getElementById('fileOpenShortcut');
+      if (shortcut && info && info.os === 'mac') shortcut.textContent = 'Cmd+O';
     }
   } catch (e) {
     console.error('getPlatformInfo failed; assuming desktop:', e);

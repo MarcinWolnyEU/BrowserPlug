@@ -1,6 +1,6 @@
 {
   "name": "browserplug",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "BrowserPlug: drives your live, logged-in Firefox or Chromium browser from MCP clients",
   "scripts": {

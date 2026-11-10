@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '2,22p' "$0" | sed 's/^#\s\{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 
 MODE="table"
 case "${1:-}" in

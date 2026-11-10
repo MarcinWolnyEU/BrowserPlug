@@ -23,7 +23,7 @@ Stdlib-only and import-cheap on purpose: launcher.py imports it before it has
 decided whether a server even exists.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 # Alias for readers that import the module rather than the symbol.
 BROWSERPLUG_VERSION = __version__

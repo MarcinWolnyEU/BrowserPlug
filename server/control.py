@@ -63,6 +63,14 @@ LAUNCHER = os.path.join(_ROOT, "launcher", "launcher.py")
 # exits. `shutdown` waits for the process to be gone (up to this long); `start` re-reads
 # /health after this pause before it calls a server running.
 SHUTDOWN_WAIT_SECONDS = 10.0
+# A /shutdown sent while a restart is under way is refused with 409 (stopping the old server
+# alone would leave its replacement running). `shutdown` keeps asking for this long, so it
+# ends up stopping the replacement. A worst-case restart takes the drain (12 s), the
+# replacement's ready marker (15 s), the socket close (2 s) and the HTTP stop (6 s), about
+# 35 s, then the replacement binds; the budget covers that sum with margin
+# (tests/unit/test_control_start.py checks it against the server's own constants).
+RESTART_WAIT_SECONDS = 60.0
+RESTART_RETRY_SECONDS = 0.5
 START_SETTLE_SECONDS = 0.5
 
 
@@ -172,6 +180,13 @@ def call(action, port, timeout=30):
         return status, {"raw": raw[:200].decode("utf-8", "replace")}
 
 
+def _refused(error):
+    """True when `error` is a connection refused: nothing listens on the port."""
+    return isinstance(error, ConnectionRefusedError) or (
+        isinstance(error, urllib.error.URLError)
+        and isinstance(error.reason, ConnectionRefusedError))
+
+
 def describe_last_restart(record):
     """One line for /health's `last_restart`, or None when the server never restarted."""
     if not isinstance(record, dict):
@@ -200,16 +215,43 @@ def main(argv=None):
               file=sys.stderr)
         return 2
     server_pid = None
-    if action == "shutdown":
-        server_pid = (mcp_port.browserplug_health(port, timeout=2.0) or {}).get("server_pid")
-    try:
-        status, body = call(action, port)
-    except OSError as e:
-        # A shutdown can drop the connection while it answers; the server is going either way.
-        if action != "shutdown":
-            print(f"{action} failed: {e}", file=sys.stderr)
-            return 1
-        status, body = 200, None
+    retry_until = time.monotonic() + RESTART_WAIT_SECONDS
+    # The pids that answered 409. Once one has, a refused connection is the gap between the
+    # old server's exit and the replacement binding, never a stop that went through.
+    restarting_pids = set()
+    while True:
+        if action == "shutdown":
+            server_pid = (mcp_port.browserplug_health(port, timeout=2.0) or {}).get("server_pid")
+        try:
+            status, body = call(action, port)
+        except OSError as e:
+            if action != "shutdown":
+                print(f"{action} failed: {e}", file=sys.stderr)
+                return 1
+            if restarting_pids:
+                # A server other than the one that said 409 dropped the connection while it
+                # accepted the shutdown: the pre-409 reading holds, and it is the one to wait
+                # for. The old server dropping its connections as it leaves, a refusal, or no
+                # /health answer at all is the restart still going.
+                replacement = (server_pid is not None and server_pid not in restarting_pids
+                               and not _refused(e))
+                if not replacement:
+                    if time.monotonic() >= retry_until:
+                        print(f"shutdown gave up: a restart was still in progress after "
+                              f"{RESTART_WAIT_SECONDS:.0f} s and the replacement had not "
+                              f"answered ({e})", file=sys.stderr)
+                        return 1
+                    time.sleep(RESTART_RETRY_SECONDS)
+                    port = find_port() or port
+                    continue
+            # A shutdown can drop the connection while it answers; the server is going either way.
+            status, body = 200, None
+        if action == "shutdown" and status == 409 and time.monotonic() < retry_until:
+            restarting_pids.add(server_pid)
+            time.sleep(RESTART_RETRY_SECONDS)
+            port = find_port() or port
+            continue
+        break
     if status == 200 and action == "shutdown" and not wait_stopped(port, server_pid):
         print(f"shutdown was accepted, but the server (pid {server_pid}) still answers on "
               f"port {port} after {SHUTDOWN_WAIT_SECONDS:.0f} s", file=sys.stderr)

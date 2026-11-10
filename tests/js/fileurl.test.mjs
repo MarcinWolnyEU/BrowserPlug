@@ -57,7 +57,9 @@ function loadRefusal() {
              setTabs: (t) => { tabs = t; },
              breakQuery: () => { queryThrows = true; },
              setAccess: (v) => { fileAccess = v; },
-             breakAccess: () => { accessThrows = true; } };
+             breakAccess: () => { accessThrows = true; },
+             setOs: (os) => { browser.runtime = { getPlatformInfo: async () => ({ os, arch: 'arm64' }) }; },
+             breakOs: () => { browser.runtime = { getPlatformInfo: async () => { throw new Error('no platform'); } }; } };
   `);
   return factory();
 }
@@ -82,6 +84,26 @@ test('NO tab created: it says so, and names what the user has to do instead', as
     'and it must not be confused with the file-access permission');
   assert.ok(msg.includes(FILE), 'names the file it refused');
   assert.match(msg, /Illegal URL/, 'the raw platform words survive, they are the ground truth');
+});
+
+test('NO tab created on a Mac: the keystroke is Cmd+O, not Ctrl+O', async () => {
+  const m = loadRefusal();
+  m.setOs('mac');
+  const msg = await m.fileUrlRefusal(FILE, 'open a tab on', 'Illegal URL');
+  assert.match(msg, /by hand \(Cmd\+O, or drag/);
+  assert.doesNotMatch(msg, /Ctrl\+O/);
+});
+
+test('NO tab created: Windows, Linux and an unreadable platform keep Ctrl+O', async () => {
+  for (const os of ['win', 'linux', 'cros', 'openbsd', 'android']) {
+    const m = loadRefusal();
+    m.setOs(os);
+    assert.match(await m.fileUrlRefusal(FILE, 'open a tab on', 'Illegal URL'), /by hand \(Ctrl\+O, or drag/, os);
+  }
+  const m = loadRefusal();
+  m.breakOs();
+  assert.match(await m.fileUrlRefusal(FILE, 'open a tab on', 'Illegal URL'), /by hand \(Ctrl\+O, or drag/,
+    'a failed platform probe must not cost the caller the refusal');
 });
 
 test('a tab DID appear: the refusal is called partial and the tab id is handed over', async () => {

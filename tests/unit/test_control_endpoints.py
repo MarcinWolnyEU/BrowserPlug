@@ -97,6 +97,28 @@ async def test_a_signed_request_reaches_the_handler(method, path, marker, effect
 
 
 @pytest.mark.asyncio
+async def test_shutdown_during_a_restart_is_refused_so_the_replacement_is_not_orphaned(effects):
+    """A stop that ended only the old server would leave the replacement it spawned running
+    on the ports. 409 asks the caller to retry once the restart is over."""
+    import asyncio
+    server, app = _app(effects)
+    server.lifecycle.restarting = True
+    status, _, body = await call(app, "POST", "/shutdown",
+                                 headers=signed_headers(server, "POST", "/shutdown", body=b"{}"),
+                                 body=b"{}")
+    await asyncio.sleep(0.6)
+    assert status == 409
+    assert "restart is in progress" in json.loads(body)["error"]
+    assert effects.calls == [], "the process must not exit"
+    server.lifecycle.restarting = False                 # the restart ended or was abandoned
+    status, _, _ = await call(app, "POST", "/shutdown",
+                              headers=signed_headers(server, "POST", "/shutdown", body=b"{}"),
+                              body=b"{}")
+    await asyncio.sleep(0.6)
+    assert status == 200 and effects.calls == ["exit0"]
+
+
+@pytest.mark.asyncio
 async def test_a_signed_request_from_the_extension_page_is_admitted(effects):
     """The options page's HTTP fallback runs on a moz-extension origin and signs."""
     server, app = _app(effects)

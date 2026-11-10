@@ -19,7 +19,8 @@ from browserplug_shared import proc_facts
 
 WINDOWS = os.name == "nt"
 LINUX = sys.platform.startswith("linux")
-NATIVE = WINDOWS or LINUX
+DARWIN = sys.platform == "darwin"
+NATIVE = WINDOWS or LINUX or DARWIN
 
 # A real interpreter, never a venv's redirector: on Windows `sys.executable` inside a uv
 # environment is a trampoline that moves its own cwd to %TEMP% and starts the real python as
@@ -55,7 +56,7 @@ def sleeper(tmp_path):
 
 # ---- the running platform ------------------------------------------------------------------
 
-@pytest.mark.skipif(not NATIVE, reason="the native backends are Windows and Linux")
+@pytest.mark.skipif(not NATIVE, reason="the native backends are Windows, Linux and macOS")
 class TestNativeBackend:
 
     def test_a_process_of_this_user_reports_its_argv_and_cwd(self, sleeper, tmp_path):
@@ -132,7 +133,7 @@ class TestNativeBackend:
 
 # ---- the cross-check with psutil ------------------------------------------------------------
 
-@pytest.mark.skipif(not NATIVE, reason="the native backends are Windows and Linux")
+@pytest.mark.skipif(not NATIVE, reason="the native backends are Windows, Linux and macOS")
 def test_every_reading_agrees_with_psutil_on_the_live_processes(sleeper, tmp_path):
     """The native readers against psutil, on every process psutil lists.
 
@@ -239,8 +240,9 @@ class TestLinuxReader:
 class TestFallback:
 
     def _no_native_backend(self, monkeypatch):
+        # A BSD: macOS has a native reader of its own (test_darwin_procs.py).
         monkeypatch.setattr(proc_facts, "_IS_WINDOWS", False)
-        monkeypatch.setattr(proc_facts.sys, "platform", "darwin")
+        monkeypatch.setattr(proc_facts.sys, "platform", "freebsd14")
 
     def test_without_a_native_backend_or_psutil_the_check_is_unavailable(self, monkeypatch):
         self._no_native_backend(monkeypatch)
@@ -362,7 +364,7 @@ def listening():
     sock.close()
 
 
-@pytest.mark.skipif(not NATIVE, reason="the native backends are Windows and Linux")
+@pytest.mark.skipif(not NATIVE, reason="the native backends are Windows, Linux and macOS")
 class TestListenerOwner:
 
     def test_the_process_that_listens_owns_the_listener(self, listening):
@@ -385,8 +387,13 @@ class TestListenerOwner:
                                  stdin=subprocess.DEVNULL)
         try:
             port = int(child.stdout.readline())
-            ours = [c.pid for c in psutil.net_connections("tcp")
-                    if c.status == "LISTEN" and c.laddr.port == port]
+            try:
+                ours = [c.pid for c in psutil.net_connections("tcp")
+                        if c.status == "LISTEN" and c.laddr.port == port]
+            except psutil.AccessDenied:         # macOS without root: ask the process itself
+                assert [c.laddr.port for c in psutil.Process(child.pid).net_connections("tcp")
+                        if c.status == "LISTEN"] == [port]
+                ours = [child.pid]
             assert ours == [child.pid]
             assert proc_facts.pid_owns_listener(child.pid, port) is True
             assert proc_facts.pid_owns_listener(os.getpid(), port) is False
@@ -395,8 +402,9 @@ class TestListenerOwner:
             child.wait()
             child.stdout.close()
 
-    @pytest.mark.skipif(not WINDOWS, reason="a bind beside a wildcard listener succeeds on "
-                                            "Windows only")
+    @pytest.mark.skipif(not WINDOWS, reason="a plain bind (no SO_REUSEADDR) beside a wildcard "
+                                            "listener succeeds on Windows only; macOS needs "
+                                            "SO_REUSEADDR for it and Linux refuses it")
     def test_a_loopback_listener_beside_a_wildcard_one_takes_the_connections(self):
         """On Windows a bind to 127.0.0.1 succeeds beside another process's 0.0.0.0 listener
         and wins every loopback connection. The wildcard process owns a listener on the port
@@ -550,6 +558,21 @@ class TestProcNetTcp:
         assert proc_facts.socket_inodes(7, str(tmp_path)) == {555, 556}
 
 
+@pytest.mark.skipif(WINDOWS, reason="Windows has no zombies: an exited process is signalled")
+def test_a_zombie_is_not_alive(sleeper):
+    """A child that exited and was not waited for still answers kill(0) and sits in the
+    process table; it runs nothing, so it is not alive (wait_gone and the restart tests ask)."""
+    import time
+    child = sleeper()
+    child.kill()
+    deadline = time.monotonic() + 10
+    while proc_facts.pid_alive(child.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    os.kill(child.pid, 0)                   # still there as a zombie: this raises if reaped
+    assert proc_facts.pid_alive(child.pid) is False
+    child.wait()
+
+
 def test_a_pid_is_alive_until_it_exits_even_while_its_handle_is_held(sleeper):
     child = sleeper()
     assert proc_facts.pid_alive(child.pid) is True
@@ -573,3 +596,16 @@ class TestImageList:
         lonely.write_bytes(b"")
         assert proc_facts.pids_running_image(str(lonely)) == []
         assert proc_facts.pids_running_image(str(tmp_path / "gone" / "python.exe")) == []
+
+
+@pytest.mark.parametrize("pid", [0, -1, True, "12", None, 1.5])
+def test_parent_and_start_refuses_what_is_not_a_pid(pid):
+    with pytest.raises(OSError):
+        proc_facts.parent_and_start(pid)
+
+
+@pytest.mark.skipif(DARWIN, reason="macOS reads them natively (test_darwin_procs.py)")
+def test_parent_and_start_has_no_reader_off_macos():
+    """Windows and Linux read the parent and the start time in launcher/client_pid.py."""
+    with pytest.raises(proc_facts.ProbeUnavailable):
+        proc_facts.parent_and_start(os.getpid())

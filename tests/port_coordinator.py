@@ -79,6 +79,11 @@ def _bind_probe(family, addr, port):
     SO_EXCLUSIVEADDRUSE (Windows) refuses the bind if ANY socket already holds the
     port, whatever options that socket set. Never use SO_REUSEADDR here — it is what
     made the old probe hand out ports that had a live server on them.
+
+    POSIX sets no option either, and that is deliberate: on BSD (macOS) a SO_REUSEADDR bind
+    succeeds beside a live listener on an overlapping address (127.0.0.1 under 0.0.0.0), so
+    only the strict bind sees a wildcard or dual-stack listener. It also refuses a port
+    with a TIME_WAIT leftover, which costs a retry here and nothing else.
     """
     with socket.socket(family, socket.SOCK_STREAM) as sock:
         if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):

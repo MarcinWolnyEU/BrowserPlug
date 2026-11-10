@@ -32,7 +32,7 @@ The dev docs (a bare `name.md` in this file means `.tmp/dev-docs/name.md`):
 
 | File | Owns |
 |---|---|
-| `ports.md` | every port, the seek, Windows socket rules, stray ports |
+| `ports.md` | every port, the seek, Windows socket rules, macOS (BSD) overlap rules, stray ports |
 | `server-operations.md` | repo layout, process pair, `server_env`, `control.py`, restarts, watchdog, logging, state, HTTP endpoints, env vars, version skew |
 | `launcher.md` | stdio relay, deadlines, recovery, spawn and adopt, proxy transport, tool-list refresh |
 | `mcp-clients.md` | client naming; this machine's client registrations |
@@ -54,7 +54,7 @@ The dev docs (a bare `name.md` in this file means `.tmp/dev-docs/name.md`):
 | `extension-popup-js.md` | the popup's Connections panel |
 | `usage-panels.md` | provider usage panels, background sampler |
 | `connection-map.md` | Options ▸ Health connection map |
-| `testing.md` | test layers, runner, MCP harness, e2e tests, static gate, Firefox harness, running rules, blind spots |
+| `testing.md` | test layers, runner, MCP harness, e2e tests, static gate, Firefox harness, running rules, running on macOS, blind spots |
 | `dependencies.md` | PEP 723 blocks, locks, floors checker, mcp ceiling, Python versions, upgrading |
 | `firefox-release.md` | AMO: lint bar, vendored defuddle, source zip |
 | `chrome-web-store.md` | Chromium release |
@@ -166,7 +166,7 @@ MCP client ──stdio──▶ launcher/launcher.py (stdlib relay; launcher/std
 - 8772 never moves: a busy 8772 means another BrowserPlug owns it, and a second server
   refuses to start. The MCP port walks 2830 to 2942, strictly ascending, so a client finds a
   relocated server by walking the same sequence; `BROWSERPLUG_MCP_PORT` pins it. Never set
-  `SO_REUSEADDR` on Windows (`ports.md`).
+  `SO_REUSEADDR` on Windows; on macOS it lets a bind sit beside a live listener (`ports.md`).
 - On Windows the server is two processes: the environment's `Scripts\python.exe`
   trampoline and the CPython child that binds the ports (`/health`'s `server_pid`). Treat
   the pair as one server; never kill one of them on its own. Use `python server/control.py
@@ -182,7 +182,8 @@ MCP client ──stdio──▶ launcher/launcher.py (stdlib relay; launcher/std
 - Run by hand (venv setup: `<venv python> server/server.py`); stop with `control.py
   shutdown` or by killing `server_pid`:
   `BROWSERPLUG_LOG_FILE=<repo>\browserplug-server.log uv run --locked --script server/server.py`
-- State lives in `%LOCALAPPDATA%\browserplug\` (`config.json`, `ws-token`, `server-env\`).
+- State lives in `%LOCALAPPDATA%\browserplug\` (`config.json`, `ws-token`, `server-env\`);
+  off Windows, macOS included, in `~/.local/state/browserplug/`.
   `BROWSERPLUG_STATE_DIR` relocates it; the unit conftest sets it, so tests never touch the
   real files.
 - `python server/preflight.py` diagnoses an install even with the server down; `GET
@@ -227,7 +228,7 @@ uv run --script tests/parity/sync_common.py
 # rebuild BOTH packages after ANY extension change (test profile cache keys on the XPI hash)
 uv run --script build_xpi.py      # -> dist/firefox/*.xpi and dist/chrome/*.zip
 
-uv run --locked --script tests/run.py -q                # unit + parity, ~9 min
+uv run --locked --script tests/run.py -q                # unit + parity, ~9 min (~8 on a Mac)
 uv run --locked --script tests/run.py parity/ -q        # <1 s
 uv run --locked --script tests/run.py --ruff check server launcher shared-py tests   # static gate, enforced by unit/test_static_analysis.py
 npm run test:js                                         # ~15 s; npm install once
@@ -239,6 +240,11 @@ FIREFOX_PATH="C:/Program Files/Firefox Developer Edition/firefox.exe" \
   PYTHONIOENCODING=utf-8 uv run --locked --script tests/run.py --integration
 # the same suite in one serial process, ~23 min; the form for one module or a -k subset
 #   ... uv run --locked --script tests/run.py integration/ -q
+
+# macOS: Developer Edition or Nightly only (release Firefox refuses the unsigned XPI);
+# CHROME_PATH is optional, the vendored Chrome for Testing is found by itself (testing.md)
+FIREFOX_PATH="/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox" \
+  PYTHONIOENCODING=utf-8 uv run --locked --script tests/run.py --integration
 ```
 
 - One integration invocation at a time on a machine, and `timing` tests only on a quiet
@@ -288,9 +294,12 @@ FIREFOX_PATH="C:/Program Files/Firefox Developer Edition/firefox.exe" \
 
 ## Environment
 
-- Windows 11. `<repo>` is the folder holding this file. MCP client configs and launcher
-  scripts outside the repo name its path, so moving it has a tail (`mcp-clients.md`,
-  `server-operations.md`). Prefer absolute paths in the Bash tool; its cwd can reset.
+- Windows 11 is the dev box; macOS is tested too, on a Mac reached through the agent-lan
+  tools (`.tmp/work/macos/MAC_TESTING.md`; `testing.md`, "Running the suites on macOS").
+  Linux is not covered by the suite. `<repo>` is the folder holding this file. MCP client
+  configs and launcher scripts outside the repo name its path, so moving it has a tail
+  (`mcp-clients.md`, `server-operations.md`). Prefer absolute paths in the Bash tool; its
+  cwd can reset.
 - Tracked files are LF in the index (`i/lf`). `core.autocrlf` is `true` on this box (user
   config), so git warns "LF will be replaced by CRLF" for an LF working file and writes
   CRLF on checkout; the warning is harmless. Gecko `background.js` is LF now, but some

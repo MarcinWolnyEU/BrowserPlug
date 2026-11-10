@@ -6,6 +6,7 @@ since the fake cannot show that the ctypes calls work.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -179,16 +180,252 @@ class TestWrapperShells:
         assert cp.SHELL_WRAPPER_NAMES == client_identity.SHELL_WRAPPER_NAMES
         assert cp.SHELL_COMMAND_FLAGS == client_identity.SHELL_COMMAND_FLAGS
         assert cp.UV_WRAPPER_NAMES == client_identity.UV_WRAPPER_NAMES
+        assert cp.POSIX_SHELL_NAMES == client_identity.POSIX_SHELL_NAMES
+        for shell, token in (("zsh", "-lc"), ("bash.exe", "-ilc"), ("sh", "-x"), ("zsh", "-l"),
+                             ("powershell.exe", "-ExecutionPolicy"), ("cmd.exe", "-lc"),
+                             ("fish", "-c"), ("bash", "--rcfile")):
+            assert cp.is_command_flag(shell, token) == client_identity.is_command_flag(
+                shell, token), (shell, token)
+
+
+class PosixFakeProbe(FakeProbe):
+    """What PosixProbe offers: argv instead of a joined command line, no venv redirector, and
+    a coarse creation clock."""
+
+    redirectors = False
+    order_slop = cp.PS_ORDER_SLOP_SECONDS
+
+    def image_path(self, pid):
+        return self._row(pid)[0]
+
+    def arguments(self, pid):
+        return self._row(pid)[1][1:]
+
+
+def posix_proc(argv, created=1000.0, parent=0):
+    return (argv[0], argv, created, parent)
+
+
+CLIENT_ARGV = ["/usr/local/bin/claude", "--model", "x"]
+UV_ARGV = ["/opt/homebrew/bin/uv", "run", "--script", "/Users/test/browserplug/server/launcher.py"]
+PY = "/opt/homebrew/opt/python@3.12/bin/python3.12"
+
+
+def posix_pick(table, prefix="/Users/test/browserplug/.venv"):
+    return cp.pick_client_pid(OWN, PPID, PosixFakeProbe(table), prefix, "/opt/homebrew")
+
+
+class TestPosixShapes:
+    """The chains macOS and Linux produce. There is no redirector: a venv's python is a
+    symlink, so a launcher run through one has the client or uv as its plain parent."""
+
+    def _under_uv(self, **over):
+        return {OWN: posix_proc([PY, "ask.py"], created=1000.0),
+                PPID: posix_proc(over.get("argv", UV_ARGV), created=over.get("created", 999.5),
+                                 parent=over.get("parent", CLIENT)),
+                CLIENT: posix_proc(CLIENT_ARGV, created=500.0)}
+
+    def test_uv_is_skipped(self):
+        assert posix_pick(self._under_uv()) == CLIENT
+
+    def test_uvx_is_skipped_by_its_bare_name(self):
+        assert posix_pick(self._under_uv(argv=["uvx", "x"])) == CLIENT
+
+    def test_uv_started_in_the_same_second_is_not_a_recycled_pid(self):
+        # ps reports whole seconds, so uv may read a few hundred ms younger than it was.
+        assert posix_pick(self._under_uv(created=1000.4)) == CLIENT
+
+    def test_a_uv_clearly_younger_than_this_process_is_kept(self):
+        assert posix_pick(self._under_uv(created=1000.0 + 5)) == PPID
+
+    def test_a_python_parent_is_kept_even_inside_a_venv(self):
+        table = {OWN: posix_proc([PY]),
+                 PPID: posix_proc(["/Users/test/browserplug/.venv/bin/python", "client.py"],
+                                  created=999.9, parent=CLIENT),
+                 CLIENT: posix_proc(CLIENT_ARGV)}
+        assert posix_pick(table) == PPID
+
+    @pytest.mark.parametrize("argv", [
+        ["/bin/sh", "-c", "uv run --script x"],
+        ["/bin/zsh", "-lc", "uv run --script x"],
+        ["/bin/bash", "-ilc", "x"],
+        ["bash", "-cl", "x"],
+        ["-zsh", "-c", "x"],
+        ["/usr/bin/fish", "-c", "x"],
+    ])
+    def test_a_shell_handed_a_command_is_crossed(self, argv):
+        table = {OWN: posix_proc([PY]), PPID: posix_proc(argv, parent=CLIENT),
+                 CLIENT: posix_proc(CLIENT_ARGV)}
+        assert posix_pick(table) == CLIENT
+
+    @pytest.mark.parametrize("argv", [
+        ["/bin/zsh"],
+        ["/bin/zsh", "-l"],
+        ["/bin/bash", "--rcfile", "x"],
+        ["/bin/bash", "-x", "script.sh"],
+        ["/bin/bash", "-e", "x.sh"],
+    ])
+    def test_an_interactive_or_script_shell_is_the_client(self, argv):
+        table = {OWN: posix_proc([PY]), PPID: posix_proc(argv, parent=CLIENT),
+                 CLIENT: posix_proc(CLIENT_ARGV)}
+        assert posix_pick(table) == PPID
+
+    def test_a_shell_above_uv_is_crossed(self):
+        table = self._under_uv(parent=70)
+        table[70] = posix_proc(["/bin/sh", "-c", "uv run --script x; true"], parent=CLIENT)
+        assert posix_pick(table) == CLIENT
+
+    def test_the_cluster_rule_does_not_reach_powershell_or_cmd(self):
+        assert not cp.is_command_flag("powershell.exe", "-ExecutionPolicy")
+        assert not cp.is_command_flag("pwsh", "-nologo")
+        assert cp.is_command_flag("powershell.exe", "-Command")
+        assert cp.is_command_flag("bash.exe", "-lc")
+        assert not cp.is_command_flag("cmd.exe", "-lc")
+
+
+class TestPosixParsers:
+    def test_proc_stat_with_a_hostile_command_name(self):
+        after_command = ["S", "77"] + ["0"] * 17 + ["98765", "1234", "56"]
+        text = "4242 (a) b c) " + " ".join(after_command)
+        assert cp.parse_proc_stat(text) == (77, 98765)
+
+    @pytest.mark.parametrize("text,seconds", [
+        ("00:07", 7), ("12:34", 754), ("01:02:03", 3723), ("02-17:57:17", 2 * 86400 + 64637),
+        ("  05:00\n", 300),
+    ])
+    def test_etime(self, text, seconds):
+        assert cp.parse_etime(text) == seconds
+
+    def test_etime_rejects_garbage(self):
+        for text in ("", "7", "a:b"):
+            with pytest.raises(ValueError):
+                cp.parse_etime(text)
+
+
+def test_ps_runs_from_its_absolute_path_not_from_the_clients_path(monkeypatch):
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="  42" + chr(10), stderr="")
+
+    monkeypatch.setattr(cp.subprocess, "run", fake_run)
+    assert cp._ps(1, "ppid") == "42"
+    assert seen[0][0] == "/bin/ps"
+
+
+def test_another_users_process_has_no_argv_and_stops_the_walk(monkeypatch):
+    """macOS refuses to read launchd and every other user's process (PermissionError, an
+    OSError): the probe answers "nothing to see" without asking ps for its command line or
+    its image name, and no step raises."""
+    def refused(pid):
+        raise PermissionError(1, "not permitted")
+
+    def no_ps(pid, field):
+        raise AssertionError(f"ps must not be asked for {field} of another user's process")
+
+    monkeypatch.setattr(cp.proc_facts, "facts", refused)
+    monkeypatch.setattr(cp, "_ps", no_ps)
+    probe = cp.PosixProbe()
+    assert probe.argv(1) == [] and probe.arguments(1) == []
+    with pytest.raises(PermissionError):
+        probe.image_path(1)
+    # As the client's parent chain: launchd is neither uv nor a shell, so it is the answer.
+    monkeypatch.setattr(probe, "created", lambda pid: 100.0)
+    monkeypatch.setattr(probe, "parent", lambda pid: 0)
+    assert cp.pick_client_pid(200, 1, probe, "/p", "/p") == 1
+
+
+def test_a_process_facts_calls_foreign_has_no_image_path_from_ps_either(monkeypatch):
+    """The same for a pid `facts` answers (False, [], None) for (Linux, Windows-style)."""
+    monkeypatch.setattr(cp.proc_facts, "facts", lambda pid: (False, [], None))
+    monkeypatch.setattr(cp, "_ps", lambda pid, field: pytest.fail(f"ps {field}"))
+    with pytest.raises(PermissionError):
+        cp.PosixProbe().image_path(7)
+
+
+def test_an_own_process_with_no_argv_still_falls_back_to_ps_for_its_name(monkeypatch):
+    monkeypatch.setattr(cp.proc_facts, "facts", lambda pid: (True, [], None))
+    monkeypatch.setattr(cp, "_ps", lambda pid, field: "/sbin/thing")
+    assert cp.PosixProbe().image_path(7) == "/sbin/thing"
+
+
+class TestMacosReadsParentAndStartNatively:
+    """On macOS the parent pid and start time come from libproc, not from two `ps` forks per
+    hop, and the ordering slop `ps`'s whole seconds needed goes away. The reader is faked, so
+    this runs everywhere."""
+
+    @pytest.fixture
+    def mac(self, monkeypatch):
+        monkeypatch.setattr(cp.sys, "platform", "darwin")
+        monkeypatch.setattr(cp.proc_facts, "darwin_probe", lambda: object())
+        monkeypatch.setattr(cp, "_ps", lambda pid, field: pytest.fail(f"ps {field}"))
+        rows = {100: (50, 1000.25), 50: (1, 900.5)}
+        calls = []
+
+        def parent_and_start(pid):
+            calls.append(pid)
+            if pid not in rows:
+                raise OSError(3, "no such process")
+            return rows[pid]
+
+        monkeypatch.setattr(cp.proc_facts, "parent_and_start", parent_and_start)
+        return calls
+
+    def test_parent_and_created_come_from_libproc_once_per_pid(self, mac):
+        probe = cp.PosixProbe()
+        assert probe.parent(100) == 50
+        assert probe.created(100) == 1000.25
+        assert probe.created(50) == 900.5
+        assert mac == [100, 50]
+
+    def test_the_ordering_slop_is_zero_with_a_microsecond_clock(self, mac):
+        assert cp.PosixProbe().order_slop == 0.0
+
+    def test_an_unreadable_pid_raises_oserror_without_asking_ps(self, mac):
+        probe = cp.PosixProbe()
+        for reading in (probe.parent, probe.created):
+            with pytest.raises(OSError):
+                reading(999)
+
+    def test_without_a_native_reader_ps_and_its_slop_stay(self, monkeypatch):
+        monkeypatch.setattr(cp.sys, "platform", "darwin")
+        monkeypatch.setattr(cp.proc_facts, "darwin_probe", lambda: None)
+        monkeypatch.setattr(cp, "_ps", lambda pid, field: "42" if field == "ppid" else "12:00")
+        probe = cp.PosixProbe()
+        assert probe.order_slop == cp.PS_ORDER_SLOP_SECONDS
+        assert probe.parent(1) == 42
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs a real /proc")
+    def test_linux_keeps_proc_and_its_slop(self, monkeypatch):
+        monkeypatch.setattr(cp.proc_facts, "darwin_probe", lambda: pytest.fail("libproc"))
+        probe = cp.PosixProbe()
+        assert probe.order_slop == cp.PS_ORDER_SLOP_SECONDS
 
 
 class TestClientPidEntry:
-    def test_a_failing_probe_falls_back_to_the_parent(self, monkeypatch):
+    @pytest.mark.parametrize("windows", [True, False], ids=["windows", "posix"])
+    def test_a_failing_probe_falls_back_to_the_parent(self, monkeypatch, windows):
         def boom():
             raise OSError("no access")
+        monkeypatch.setattr(cp, "_IS_WINDOWS", windows)
         monkeypatch.setattr(cp, "_WindowsProbe", boom)
+        monkeypatch.setattr(cp, "PosixProbe", boom)
         cp.client_pid.cache_clear()
         try:
             assert cp.client_pid() == os.getppid()
+        finally:
+            cp.client_pid.cache_clear()
+
+    def test_posix_uses_the_posix_probe_and_the_real_prefixes(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(cp, "_IS_WINDOWS", False)
+        monkeypatch.setattr(cp, "PosixProbe", lambda: "probe")
+        monkeypatch.setattr(cp, "pick_client_pid", lambda *a: calls.append(a) or 9)
+        cp.client_pid.cache_clear()
+        try:
+            assert cp.client_pid() == 9
+            assert calls == [(os.getpid(), os.getppid(), "probe", sys.prefix, sys.base_prefix)]
         finally:
             cp.client_pid.cache_clear()
 
@@ -210,6 +447,9 @@ ASK = ("from launcher.client_pid import client_pid\n"
        "print(client_pid(), os.getppid())\n")
 
 
+POSIX_SHELLS = ("sh", "bash", "zsh")
+
+
 def _run(python, wrapper=()):
     """(reported pid, plain parent pid) of a process started through `wrapper`, if any."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), str(ROOT / "shared-py")])}
@@ -218,6 +458,9 @@ def _run(python, wrapper=()):
         script.write_text(ASK)
         if wrapper and wrapper[0] == "powershell":
             argv = [*wrapper, f"& '{python}' '{script}'"]
+        elif wrapper and os.path.basename(wrapper[0]) in POSIX_SHELLS:
+            # The trailing `; :` keeps the shell from exec'ing the interpreter in its place.
+            argv = [*wrapper, f"'{python}' '{script}'; :"]
         else:
             argv = [*wrapper, python, str(script)]
         out = subprocess.run(argv, env=env, capture_output=True, text=True,
@@ -245,12 +488,18 @@ def _run_uv(tmp_path, metadata):
     env = {k: v for k, v in os.environ.items() if k.upper() != "VIRTUAL_ENV"}
     env.update(PYTHONPATH=os.pathsep.join([str(ROOT), str(ROOT / "shared-py")]),
                UV_CACHE_DIR=str(tmp_path / "uv-cache"), UV_OFFLINE="1")
-    base_python = Path(sys.base_prefix) / "python.exe"
-    out = subprocess.run([uv, "run", "--python", str(base_python), "--script", str(script)],
+    out = subprocess.run([uv, "run", "--python", str(_base_python()), "--script", str(script)],
                          env=env, cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr
     reported, plain_parent = out.stdout.split()
     return int(reported), int(plain_parent)
+
+
+def _base_python():
+    """The interpreter the test venv was made from (no redirector above it anywhere)."""
+    if os.name == "nt":
+        return Path(sys.base_prefix) / "python.exe"
+    return Path(getattr(sys, "_base_executable", None) or sys.executable)
 
 
 def _make_stock_venv(path):
@@ -316,3 +565,49 @@ class TestRealProcesses:
                                                "-Command"))
         assert reported == os.getpid()
         assert plain_parent != os.getpid()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX probe is for Linux and macOS")
+class TestRealProcessesPosix:
+    """The same launches on a real process table. The reported pid must be this process, not
+    the shell or uv that sits between it and the launcher helper."""
+
+    def test_a_venv_interpreter_reports_its_plain_parent(self):
+        reported, plain_parent = _run(sys.executable)
+        assert reported == plain_parent == os.getpid()
+
+    @pytest.mark.parametrize("shell,flag", [("sh", "-c"), ("bash", "-lc"), ("zsh", "-lc")])
+    def test_a_command_shell_is_crossed_for_real(self, shell, flag):
+        path = shutil.which(shell)
+        if path is None:
+            pytest.skip(f"{shell} is not installed here")
+        reported, plain_parent = _run(sys.executable, wrapper=(path, flag))
+        assert reported == os.getpid()
+        assert plain_parent != os.getpid()
+
+    @pytest.mark.parametrize("metadata", [True, False], ids=["script-env", "no-metadata"])
+    def test_uv_run_script_reports_the_process_that_started_it(self, tmp_path, metadata):
+        reported, plain_parent = _run_uv(tmp_path, metadata)
+        assert reported == os.getpid()
+        assert plain_parent != os.getpid()
+
+    def test_the_probe_reads_this_process_and_its_parent(self):
+        probe = cp.PosixProbe()
+        assert probe.parent(os.getpid()) == os.getppid()
+        assert probe.created(os.getpid()) >= probe.created(os.getppid()) - cp.PS_ORDER_SLOP_SECONDS
+        assert os.path.basename(probe.image_path(os.getpid())).lower().startswith("python")
+        assert isinstance(probe.arguments(os.getpid()), list)
+
+    def test_a_vanished_pid_raises_oserror(self):
+        probe = cp.PosixProbe()
+        for reading in (probe.parent, probe.created, probe.image_path):
+            with pytest.raises(OSError):
+                reading(2 ** 22 + 12345)
+
+    def test_ps_alone_carries_the_probe_when_there_is_no_native_reader(self, monkeypatch):
+        def unavailable(pid):
+            raise cp.proc_facts.ProbeUnavailable("test")
+        monkeypatch.setattr(cp.proc_facts, "facts", unavailable)
+        probe = cp.PosixProbe()
+        assert probe.argv(os.getpid())[0]
+        assert os.path.basename(probe.image_path(os.getpid())).lower().startswith("python")

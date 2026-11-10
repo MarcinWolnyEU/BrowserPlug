@@ -1139,7 +1139,8 @@ def _env_home_python(minors):
     return None
 
 
-def launcher_python(project_root, *, uv=None, environ=None, runner=None, ask_uv=True):
+def launcher_python(project_root, *, uv=None, environ=None, runner=None, ask_uv=True,
+                    platform=None):
     """(python, None): the interpreter MCP clients register the launcher with, uv's
     minor-version link for a Python minor inside the server's requires-python range;
     (None, why) when there is none.
@@ -1156,10 +1157,16 @@ def launcher_python(project_root, *, uv=None, environ=None, runner=None, ask_uv=
     macOS and the BSDs get (None, None): a bare interpreter has no psutil there, so a
     launcher on it cannot check which process answers /health, nor whether the server
     environment is in use. The `uv run --script` form installs psutil for the launcher on
-    darwin (its PEP 723 block), so that is the registration to recommend.
+    darwin (its PEP 723 block), so that is the registration to recommend. What would lift
+    this: a launcher that can tell which process answers /health and whether the server
+    environment is in use without psutil, which means a native darwin reader in
+    proc_facts (socket owner, process image and argv), plus a bare-interpreter launcher
+    run on macOS to show it holds. `platform` (default sys.platform) lets a test ask what
+    another platform would answer.
     Never raises."""
     try:
-        if not (sys.platform == "win32" or sys.platform.startswith("linux")):
+        platform = platform or sys.platform
+        if not (platform == "win32" or platform.startswith("linux")):
             return None, None
         root = os.path.realpath(project_root)
         minors = server_python_minors(root)

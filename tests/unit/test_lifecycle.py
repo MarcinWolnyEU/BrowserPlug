@@ -228,6 +228,30 @@ def test_a_restart_with_no_interpreter_is_refused_while_the_server_is_whole(monk
     assert server.lifecycle.restarting is False
 
 
+def test_a_restart_that_cannot_be_scheduled_does_not_leave_the_server_restarting(
+        monkeypatch):
+    """`restarting` is set before the sequence is scheduled and only the sequence clears it.
+    A loop that refuses the work used to leave it set, so /shutdown answered 409 forever."""
+    server, ran, flags = _server_with_fake_sequence(monkeypatch, lambda: "python")
+
+    class _RefusingLoop:
+        def is_closed(self):
+            return False
+
+        def call_soon_threadsafe(self, *args, **kwargs):
+            raise RuntimeError("Event loop is closed")
+
+    server.lifecycle.ws_loop = _RefusingLoop()
+    verdict = server.lifecycle.begin_restart("POST /restart").result(10)
+    assert "could not start the sequence" in verdict
+    assert server.lifecycle.restarting is False
+    assert server.lifecycle.last_restart["outcome"] == "aborted"
+    assert ran == [] and flags == []
+    # Not stuck: a second request is accepted rather than refused as already running.
+    server.lifecycle.ws_loop = None
+    assert server.lifecycle.begin_restart("POST /restart").result(10) is None
+
+
 def test_a_restart_whose_environment_would_change_is_refused_and_says_why(monkeypatch):
     def changed():
         raise server_env.ServerEnvError(

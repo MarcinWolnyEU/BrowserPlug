@@ -12,6 +12,7 @@ import types
 
 import pytest
 
+from browserplug_shared import socket_table
 from server.reporting import client_identity
 from server.web import peer_owner
 
@@ -53,6 +54,8 @@ def table(monkeypatch):
 
     monkeypatch.setattr(client_identity, "pid_for_local_port", pid_for_port)
     monkeypatch.setattr(peer_owner, "_server_owner", None)
+    # The gate skips its lookup where the table cannot show another user (macOS, non-root).
+    monkeypatch.setattr(socket_table, "sees_other_users", lambda: True)
     monkeypatch.setitem(sys.modules, "psutil", types.SimpleNamespace(
         Process=FakeProc, NoSuchProcess=NoSuchProcess))
     return t

@@ -251,3 +251,175 @@ def test_shutdown_waits_for_the_process_as_well_as_for_health(monkeypatch, capsy
     assert control.main(["shutdown"]) == 0
     assert seen == [4242, 4242, 4242]
     assert json.loads(capsys.readouterr().out) == {"ok": 1}
+
+
+class _Restarting:
+    """A server that is restarting: its /shutdown answers 409 `refusals` times, then the old
+    process is gone for `gap` calls (connection refused), then the replacement answers."""
+
+    def __init__(self, refusals=2, gap=1):
+        self.refusals, self.gap, self.posts = refusals, gap, []
+
+    def call(self, action, port, timeout=30):
+        self.posts.append((action, port))
+        if self.refusals:
+            self.refusals -= 1
+            return 409, {"error": "a restart is in progress; retry the shutdown"}
+        if self.gap:
+            self.gap -= 1
+            raise ConnectionRefusedError("old server gone, replacement not bound yet")
+        return 200, {"status": "shutdowning", "pid": 5151}
+
+    def health(self, port, **kw):
+        """The old server (pid 4242) until the connection is refused, then the replacement."""
+        return {**HEALTH, "server_pid": 5151} if len(self.posts) >= 3 else HEALTH
+
+
+def test_shutdown_during_a_restart_waits_and_stops_the_replacement(monkeypatch, capsys):
+    """`control.py restart` then `shutdown` at once used to stop only the old server, and the
+    replacement it had spawned kept the ports. The 409 is retried until the replacement
+    answers, and that is the server `shutdown` stops and waits for."""
+    fake = _Restarting()
+    monkeypatch.setattr(control, "RESTART_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(control, "find_port", lambda: 2830)
+    monkeypatch.setattr(control, "master_token", lambda: "token")
+    monkeypatch.setattr(control, "call", fake.call)
+    monkeypatch.setattr(control.mcp_port, "browserplug_health", fake.health)
+    waited = []
+
+    def wait_stopped(port, pid, timeout=None):
+        waited.append(pid)
+        return True
+
+    monkeypatch.setattr(control, "wait_stopped", wait_stopped)
+    assert control.main(["shutdown"]) == 0
+    assert [a for a, _ in fake.posts] == ["shutdown"] * 4        # 409, 409, refused, accepted
+    assert waited == [5151], "it waits for the replacement, not for the old pid"
+    assert json.loads(capsys.readouterr().out)["pid"] == 5151
+
+
+def test_shutdown_gives_up_on_a_restart_that_never_ends(monkeypatch, capsys):
+    monkeypatch.setattr(control, "RESTART_WAIT_SECONDS", 0.1)
+    monkeypatch.setattr(control, "RESTART_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(control, "find_port", lambda: 2830)
+    monkeypatch.setattr(control, "master_token", lambda: "token")
+    monkeypatch.setattr(control, "call", lambda action, port, timeout=30: (
+        409, {"error": "a restart is in progress"}))
+    monkeypatch.setattr(control.mcp_port, "browserplug_health", lambda port, **kw: HEALTH)
+    assert control.main(["shutdown"]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and "refused with HTTP 409" in err and "restart is in progress" in err
+
+
+class _Scripted:
+    """/shutdown answers and /health pids, step by step. A step is an (answer, health pid)
+    pair: `answer` is a (status, body) tuple or an exception to raise, and the pid is what
+    /health reports just before that call (None = /health does not answer). The last step
+    repeats."""
+
+    def __init__(self, *steps):
+        self.steps, self.index = list(steps), 0
+
+    def _step(self):
+        return self.steps[min(self.index, len(self.steps) - 1)]
+
+    def health(self, port, **kw):
+        pid = self._step()[1]
+        return None if pid is None else {**HEALTH, "server_pid": pid}
+
+    def call(self, action, port, timeout=30):
+        answer = self._step()[0]
+        self.index += 1
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _wire_scripted(monkeypatch, fake, waited):
+    monkeypatch.setattr(control, "RESTART_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(control, "find_port", lambda: 2830)
+    monkeypatch.setattr(control, "master_token", lambda: "token")
+    monkeypatch.setattr(control, "call", fake.call)
+    monkeypatch.setattr(control.mcp_port, "browserplug_health", fake.health)
+
+    def wait_stopped(port, pid, timeout=None):
+        waited.append(pid)
+        return True
+
+    monkeypatch.setattr(control, "wait_stopped", wait_stopped)
+
+
+_BUSY = (409, {"error": "a restart is in progress; retry the shutdown"})
+
+
+def test_a_gap_that_outlasts_the_budget_after_a_409_is_not_a_shutdown(monkeypatch, capsys):
+    """The old server stopped answering and the replacement had not bound when the budget ran
+    out: /health fails, so there is no pid to wait for and wait_stopped(None) would return at
+    once. That used to print success and exit 0 while the replacement bound and kept running."""
+    waited = []
+    fake = _Scripted((_BUSY, 4242), (ConnectionRefusedError("gap"), None))
+    _wire_scripted(monkeypatch, fake, waited)
+    monkeypatch.setattr(control, "RESTART_WAIT_SECONDS", 0.2)
+    assert control.main(["shutdown"]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and "restart was still in progress" in err
+    assert waited == [], "nothing was accepted, so there is nothing to wait for"
+
+
+def test_a_gap_with_no_health_is_waited_out_and_the_replacement_is_stopped(
+        monkeypatch, capsys):
+    waited = []
+    gap = (ConnectionRefusedError("gap"), None)
+    fake = _Scripted((_BUSY, 4242), gap, gap, ((200, {"pid": 5151}), 5151))
+    _wire_scripted(monkeypatch, fake, waited)
+    assert control.main(["shutdown"]) == 0
+    assert waited == [5151]
+    assert json.loads(capsys.readouterr().out)["pid"] == 5151
+
+
+def test_a_connection_the_replacement_drops_while_accepting_counts_as_accepted(
+        monkeypatch, capsys):
+    """After a 409 the same rule as before it holds for a server that did not say 409: a
+    dropped connection is the server leaving. The replacement is the one to wait for."""
+    waited = []
+    fake = _Scripted((_BUSY, 4242), (ConnectionResetError("reset"), 5151))
+    _wire_scripted(monkeypatch, fake, waited)
+    assert control.main(["shutdown"]) == 0
+    assert waited == [5151]
+    assert capsys.readouterr().out.strip() == "shutdown requested"
+
+
+def test_the_old_server_dropping_connections_as_it_leaves_is_not_an_acceptance(
+        monkeypatch, capsys):
+    """The server that said 409 resets connections while it closes its HTTP side; that is the
+    restart going on, not a stop that went through."""
+    waited = []
+    fake = _Scripted((_BUSY, 4242), (ConnectionResetError("reset"), 4242),
+                     ((200, {"pid": 5151}), 5151))
+    _wire_scripted(monkeypatch, fake, waited)
+    assert control.main(["shutdown"]) == 0
+    assert waited == [5151], "the reset was retried; it was not taken as the stop"
+
+
+def test_the_restart_wait_outlasts_a_worst_case_restart():
+    """`shutdown` keeps retrying a 409 for RESTART_WAIT_SECONDS. A restart can spend its full
+    drain, the replacement's ready-marker wait, the socket close and the HTTP stop before the
+    replacement binds, so the budget has to cover their sum with room to spare."""
+    from server.runtime import graceful_restart, lifecycle
+    worst = (graceful_restart.DRAIN_MAX_SECONDS + lifecycle.REPLACEMENT_READY_SECONDS
+             + graceful_restart.CLOSE_TIMEOUT_SECONDS
+             + graceful_restart.HTTP_STOP_TIMEOUT_SECONDS)
+    assert control.RESTART_WAIT_SECONDS >= worst + 15.0
+
+
+def test_a_dropped_connection_without_a_restart_still_counts_as_a_shutdown(monkeypatch):
+    """The old reading stays: no 409 seen, so a dropped connection is the server leaving."""
+    def dropped(action, port, timeout=30):
+        raise ConnectionResetError("reset while answering")
+
+    monkeypatch.setattr(control, "find_port", lambda: 2830)
+    monkeypatch.setattr(control, "master_token", lambda: "token")
+    monkeypatch.setattr(control, "call", dropped)
+    monkeypatch.setattr(control.mcp_port, "browserplug_health", lambda port, **kw: None)
+    monkeypatch.setattr(control, "wait_stopped", lambda port, pid, timeout=None: True)
+    assert control.main(["shutdown"]) == 0

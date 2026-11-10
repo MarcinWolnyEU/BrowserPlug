@@ -33,6 +33,11 @@ REASONIX_EXE = ("C:\\nvm\\v24.15.0\\node_modules\\reasonix\\node_modules\\"
 DSH_BIN = ("C:\\Users\\Someone\\AppData\\Local\\npm-cache\\_npx\\1e7f6d9597241db0\\"
            "node_modules\\.bin\\..\\@deepseek-ai\\dsh\\lib\\bin.js")
 POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+# A cwd of ANOTHER project, in this host's own absolute form. The argv fixtures below keep
+# Windows-shaped paths because only their last segment or basename is read; a cwd is
+# resolved as a path, so it must be one this platform can resolve.
+ELSEWHERE = os.path.join(os.path.abspath(os.sep), "somebody", "else")
+WINDOWS_CWD = "C:\\somebody\\else"
 
 
 class FakeProc:
@@ -96,7 +101,39 @@ def test_two_bare_interpreters_do_not_match_each_other():
 def test_a_stranger_launcher_py_from_another_project_is_not_ours():
     """The walk must stop at an unrelated `launcher.py`, or it would credit the connection
     to that process's parent — a client this server never spoke to."""
-    proc = FakeProc(500, ["python.exe", "launcher.py"], cwd="C:\\somebody\\else")
+    proc = FakeProc(500, ["python.exe", "launcher.py"], cwd=ELSEWHERE)
+    assert client_identity.is_launcher_process(proc) is False
+
+
+def test_a_launcher_py_in_a_checkout_named_for_the_project_is_ours_whatever_the_server_cwd(
+        tmp_path):
+    """The fallback for another checkout: a relative `launcher.py` that resolves under a
+    `browserplug` directory. It reads the OTHER process's cwd, not this process's."""
+    other = tmp_path / "browserplug"
+    other.mkdir()
+    proc = FakeProc(501, ["python", "launcher.py"], cwd=str(other))
+    assert client_identity.is_launcher_process(proc) is True
+
+
+def test_a_cwd_that_is_not_absolute_here_places_nothing(monkeypatch, tmp_path):
+    """A Windows `C:\\...` cwd read on POSIX is a relative path. Resolving it against the
+    server's cwd put every such `launcher.py` under that directory, and when the checkout
+    was called `browserplug` the substring fallback then took a stranger's script for ours.
+    On Windows the same path is simply absolute and names no project, so the answer is the
+    same on both."""
+    named = tmp_path / "browserplug"
+    named.mkdir()
+    monkeypatch.chdir(named)
+    proc = FakeProc(500, ["python.exe", "launcher.py"], cwd=WINDOWS_CWD)
+    assert client_identity.is_launcher_process(proc) is False
+    proxy = FakeProc(500, ["python.exe", "server/proxy/__main__.py"], cwd=WINDOWS_CWD)
+    assert client_identity.is_proxy_process(proxy) is False
+    dash_m = FakeProc(500, ["python.exe", "-m", "server.proxy"], cwd=WINDOWS_CWD)
+    assert client_identity.is_proxy_process(dash_m) is False
+
+
+def test_a_missing_cwd_places_no_relative_launcher():
+    proc = FakeProc(500, ["python", "launcher.py"], cwd=None)
     assert client_identity.is_launcher_process(proc) is False
 
 
@@ -199,7 +236,7 @@ def test_a_uv_whose_argv_cannot_place_the_launcher_is_crossed_by_name(fake_psuti
     """A relative script path from another cwd (or uvx) is not recognisable as our launcher,
     but a uv.exe right above one is never the client."""
     _uv_chain(fake_psutil, [UV_EXE, "run", "--script", "server/launcher.py"],
-              uv_cwd="C:\\somewhere\\else")
+              uv_cwd=ELSEWHERE)
     with patch.object(client_identity, "pid_for_local_port", return_value=5100):
         assert client_identity.resolve_client_chain(4242) == (5000, 5100)
 
@@ -251,7 +288,7 @@ def test_the_proxy_chain_reaches_the_client_and_names_the_launcher(fake_psutil):
 
 def test_the_proxy_chain_with_a_uv_that_cannot_place_the_launcher(fake_psutil):
     _proxy_chain(fake_psutil, [UV_EXE, "run", "--script", "server/launcher.py"],
-                 uv_cwd="C:\\somewhere\\else")
+                 uv_cwd=ELSEWHERE)
     with patch.object(client_identity, "pid_for_local_port", return_value=5300):
         assert client_identity.resolve_client_chain(4242) == (5000, 5100)
 
@@ -290,14 +327,14 @@ def test_dash_m_server_proxy_counts_only_from_this_checkout():
     assert client_identity.is_proxy_process(
         FakeProc(1, [UV_PYTHON, "-m", "server.proxy"], cwd=PROJECT_ROOT)) is True
     assert client_identity.is_proxy_process(
-        FakeProc(1, [UV_PYTHON, "-m", "server.proxy"], cwd="C:\\somebody\\else")) is False
+        FakeProc(1, [UV_PYTHON, "-m", "server.proxy"], cwd=ELSEWHERE)) is False
 
 
 def test_a_relative_proxy_path_is_resolved_against_the_cwd():
     assert client_identity.is_proxy_process(
-        FakeProc(1, [UV_PYTHON, "server\\proxy\\__main__.py"], cwd=PROJECT_ROOT)) is True
+        FakeProc(1, [UV_PYTHON, os.path.join("server", "proxy", "__main__.py")], cwd=PROJECT_ROOT)) is True
     assert client_identity.is_proxy_process(
-        FakeProc(1, [UV_PYTHON, "server/proxy/__main__.py"], cwd="C:\\somebody\\else")) is False
+        FakeProc(1, [UV_PYTHON, "server/proxy/__main__.py"], cwd=ELSEWHERE)) is False
 
 
 def test_the_launcher_and_other_processes_are_not_the_proxy():
@@ -343,6 +380,27 @@ def test_an_interactive_shell_is_where_the_walk_stops(fake_psutil):
     """No command flag = a terminal a human typed the launcher into. There the shell IS
     the nearest thing to a client; walking past it would name whatever owns the window."""
     _dsh_through_a_shell(fake_psutil, [POWERSHELL])
+    with patch.object(client_identity, "pid_for_local_port", return_value=4764):
+        assert client_identity.resolve_client_chain(4242) == (4700, 4764)
+
+
+@pytest.mark.parametrize("shell_argv", [
+    ["/bin/sh", "-c", "uv run --script server/launcher.py; true"],
+    ["/bin/zsh", "-lc", "uv run --script server/launcher.py"],
+    ["-zsh", "-c", "x"],
+    ["/bin/bash", "-ilc", "x"],
+])
+def test_a_posix_shell_handed_a_command_is_crossed(fake_psutil, shell_argv):
+    """macOS and Linux clients start the launcher through `sh -c` or a login `zsh -lc`."""
+    _dsh_through_a_shell(fake_psutil, shell_argv)
+    with patch.object(client_identity, "pid_for_local_port", return_value=4764):
+        assert client_identity.resolve_client_chain(4242) == (31524, 4764)
+
+
+@pytest.mark.parametrize("shell_argv", [["/bin/zsh"], ["-zsh"], ["/bin/bash", "-l"],
+                                        ["/bin/bash", "-x", "script.sh"]])
+def test_a_posix_shell_without_a_command_is_where_the_walk_stops(fake_psutil, shell_argv):
+    _dsh_through_a_shell(fake_psutil, shell_argv)
     with patch.object(client_identity, "pid_for_local_port", return_value=4764):
         assert client_identity.resolve_client_chain(4242) == (4700, 4764)
 

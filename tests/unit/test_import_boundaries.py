@@ -35,10 +35,13 @@ STDLIB = set(sys.stdlib_module_names)
 # Empty: {"launcher/<module>.py": {"<top-level name>", ...}} is the shape of an entry.
 LAUNCHER_LAZY_ALLOWED = {}
 # Third-party imports the shared package may make, lazily and guarded. proc_facts reads a
-# pid's owner, argv and cwd natively on Windows and Linux and falls back to psutil only where
-# it has no native backend (macOS); nothing else in the package may import it.
+# pid's owner, argv and cwd natively on Windows, Linux and macOS and falls back to psutil only
+# where it has no native backend (a BSD, or a macOS whose libproc cannot be used).
+# socket_table is the server's one TCP-table call: psutil's table where psutil can read it,
+# the native macOS table otherwise. Nothing else in the package may import psutil.
 SHARED_LAZY_ALLOWED = {
     "browserplug_shared/proc_facts.py": {"psutil"},
+    "browserplug_shared/socket_table.py": {"psutil"},
 }
 
 
@@ -250,8 +253,8 @@ _OWNERSHIP_PROBE = textwrap.dedent("""
 """)
 
 
-@pytest.mark.skipif(not (sys.platform == "win32" or sys.platform.startswith("linux")),
-                    reason="proc_facts has a native backend on Windows and Linux only")
+@pytest.mark.skipif(not (sys.platform in ("win32", "darwin") or sys.platform.startswith("linux")),
+                    reason="proc_facts has a native backend on Windows, Linux and macOS only")
 def test_the_ownership_check_works_with_no_psutil_anywhere():
     sleeper = "import time; time.sleep(60)"
     children = [subprocess.Popen([sys.executable, "-c", sleeper, *extra])

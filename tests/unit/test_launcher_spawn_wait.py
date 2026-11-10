@@ -10,6 +10,7 @@ import os
 import subprocess
 import textwrap
 import time as _time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -134,7 +135,7 @@ def test_two_spawns_get_distinct_capture_files_that_do_not_truncate_each_other(e
             second = launcher.spawn_detached_server()
             launcher.spawn_detached_server()
     assert first.startup_log != second.startup_log
-    assert "child says hi" in open(first.startup_log, encoding="utf-8").read()
+    assert "child says hi" in Path(first.startup_log).read_text(encoding="utf-8")
     assert first.startup_log.endswith(".startup.log")
 
 

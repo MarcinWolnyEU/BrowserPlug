@@ -28,7 +28,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '2,27p' "$0" | sed 's/^#\s\{0,1\}//'; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
 
 MODE="ensure"
 WANT_VERSION=""
@@ -55,8 +55,9 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Detect the CfT platform slug unless one was given. Note the harness's dist fallback
-# is win64-only (_DIST_CHROME); on POSIX the printed CHROME_PATH export is the route.
+# Detect the CfT platform slug unless one was given. The harness's own lookup
+# (tests/chromium_test_utils.py, _dist_chrome_candidates) knows the host platform's
+# layout, so CHROME_PATH is only needed to point it somewhere else.
 if [ -z "$PLATFORM" ]; then
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)  PLATFORM="win64" ;;
@@ -87,14 +88,16 @@ installed_version() {
     return
   fi
   # No marker: a hand-placed install predating this script. Windows CfT builds ship a
-  # <version>.manifest next to chrome.exe, which is the same number.
-  local m
+  # <version>.manifest next to chrome.exe, which is the same number; the macOS app
+  # bundle carries it in Contents/Info.plist (BIN is Contents/MacOS/<name>).
+  local m v
   m="$(ls "$(dirname "$BIN")"/[0-9]*.manifest 2>/dev/null | head -1 || true)"
   if [ -n "$m" ]; then
     basename "$m" .manifest
-  else
-    echo "unknown"
+    return
   fi
+  v="$(grep -A1 CFBundleShortVersionString "$(dirname "$BIN")/../Info.plist" 2>/dev/null | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p' | head -1 || true)"
+  echo "${v:-unknown}"
 }
 
 if [ -f "$BIN" ] && [ "$MODE" != "force" ]; then
@@ -202,6 +205,8 @@ else:
 print(f"  version {version}")
 print(f"  {url}")
 
+# dist/ does not exist on a fresh checkout; the staging dir goes beside DEST.
+os.makedirs(os.path.dirname(DEST) or ".", exist_ok=True)
 tmp_dir = tempfile.mkdtemp(prefix=".cft-", dir=os.path.dirname(DEST) or ".")
 zip_path = os.path.join(tmp_dir, "chrome.zip")
 staging = os.path.join(tmp_dir, "unpacked")
@@ -225,8 +230,16 @@ try:
     urllib.request.urlretrieve(url, zip_path, reporthook=progress)
     print("", file=sys.stderr)
 
+    # zipfile writes a symlink entry as a plain file holding the link target, which breaks
+    # the macOS app bundle (Frameworks/.../Versions/Current is a link), so links are
+    # collected and recreated after the rest is extracted. On Windows the archive has none.
+    links = []
     with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(staging)
+        for info in zf.infolist():
+            if os.name != "nt" and stat.S_ISLNK(info.external_attr >> 16):
+                links.append((info.filename, zf.read(info).decode("utf-8")))
+            else:
+                zf.extract(info, staging)
 
     # zipfile drops the executable bit; restore it from the archive's own mode bits
     # so the extracted browser is runnable on POSIX (a no-op on Windows).
@@ -234,10 +247,14 @@ try:
         with zipfile.ZipFile(zip_path) as zf:
             for info in zf.infolist():
                 mode = info.external_attr >> 16
-                if mode & stat.S_IXUSR:
+                if mode & stat.S_IXUSR and not stat.S_ISLNK(mode):
                     target = os.path.join(staging, info.filename)
                     if os.path.exists(target):
                         os.chmod(target, os.stat(target).st_mode | 0o755)
+        for name, target in links:
+            link = os.path.join(staging, name)
+            os.makedirs(os.path.dirname(link), exist_ok=True)
+            os.symlink(target, link)
 
     with open(os.path.join(staging, ".cft-version"), "w", encoding="utf-8") as fh:
         fh.write(version + "\n")
@@ -254,8 +271,5 @@ PY
 [ -f "$BIN" ] || { echo "error: download finished but $BIN is not there" >&2; exit 1; }
 
 echo "Binary: $BIN"
-case "$PLATFORM" in
-  win64) ;;
-  *) echo "Note: the test harness's dist fallback is win64-only, so on this platform export:"
-     echo "  export CHROME_PATH=\"$BIN\"" ;;
-esac
+echo "The test harness finds it without CHROME_PATH when $PLATFORM is this machine's platform;"
+echo "to use it from another checkout, export CHROME_PATH=\"$BIN\""

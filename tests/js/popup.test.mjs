@@ -1376,6 +1376,25 @@ test('popup: on DESKTOP the file:// block is unchanged', async () => {
   }
 });
 
+test('popup: on a Mac the file:// block names Cmd+O, other desktops keep Ctrl+O', async () => {
+  const mac = await initPopup({ platformOs: 'mac' });
+  try {
+    assert.equal(mac.document.getElementById('fileOpenShortcut').textContent, 'Cmd+O');
+    assert.doesNotMatch(mac.document.getElementById('fileAccessDesktopHow').textContent, /Ctrl\+O/);
+  } finally {
+    mac.window.close();
+  }
+  for (const platformOs of ['win', 'linux', null]) {
+    const { window, document } = await initPopup({ platformOs });
+    try {
+      assert.match(document.getElementById('fileAccessDesktopHow').textContent, /address bar, or Ctrl\+O\)/,
+        String(platformOs));
+    } finally {
+      window.close();
+    }
+  }
+});
+
 test('popup: on mobile the proxy block offers a Grant button, not about:addons', async () => {
   const { window, document } = await initPopup({ platformOs: 'android', proxyGranted: false });
   try {

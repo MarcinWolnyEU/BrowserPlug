@@ -31,28 +31,44 @@ function loadActTimeout() {
   const end = BG_SRC.indexOf('// Content handlers', start);
   assert.ok(start >= 0 && end > start, 'act step deadline block not found in background.js');
   const block = BG_SRC.slice(start, end);
+  const lStart = BG_SRC.indexOf('function markNavCommitted(d) {');
+  const lEnd = BG_SRC.indexOf('// --- lastAccessed, observed', lStart);
+  assert.ok(lStart >= 0 && lEnd > lStart, 'the webNavigation listeners were not found in background.js');
+  const listeners = BG_SRC.slice(lStart, lEnd);
 
   // eslint-disable-next-line no-new-func
   const factory = new Function(`
     const TAB_NAV = new Map();
     let tabState = { url: 'https://shop.example/listing', title: 'Listing', status: 'complete' };
     let tabGone = false;
+    // The real webNavigation listeners, so a test replays the events the browser fires
+    // instead of hand-writing the TAB_NAV entry they would leave behind.
+    const L = {};
+    const hook = (name) => ({ addListener: (fn) => { L[name] = fn; } });
+    const wakeSettle = () => {};
     const browser = {
       tabs: {
         get: async () => {
           if (tabGone) throw new Error('No tab with id');
           return tabState;
         }
-      }
+      },
+      webNavigation: { onCommitted: hook('committed'), onHistoryStateUpdated: hook('history'),
+        onReferenceFragmentUpdated: hook('fragment'), onErrorOccurred: hook('error'),
+        onCompleted: hook('completed') }
     };
     let netDigest = { requests: 0, pending: 0 };
     let consoleDigest = { errors: 0, first: [] };
     function netDigestSince() { return netDigest; }
     function consoleErrorsSince() { return consoleDigest; }
 
+    ${listeners}
     ${block}
 
     return {
+      fire: (name, timeStamp, frameId) => L[name]({ tabId: 1, frameId: frameId || 0,
+        url: tabState.url, timeStamp }),
+      nav: () => TAB_NAV.get(1) || {},
       ACT_STEP_TIMEOUT_MS, ACT_MIN_STEP_MS,
       actStepBudget, actClampWait, actTimeoutReport, runActStepWithDeadline,
       setTab: (t) => { tabState = Object.assign(tabState, t); },
@@ -129,6 +145,195 @@ test('a timed-out step that NAVIGATED says so, and says to check where you lande
   assert.match(res.error, /seagate-exos-16tb/, 'names the destination, not just "it moved"');
   assert.match(res.error, /CHECK WHERE YOU LANDED/,
     'the worst observed case was a timed-out click landing on the WRONG product');
+});
+
+// Chrome 159 resolves the injection of a navigating click with [{result: null}] instead of
+// leaving it pending. The deadline never fires then, so the empty answer itself must be
+// read against the tab's commit record: only a CROSS-DOCUMENT commit (webNavigation
+// onCommitted) means the page was replaced. The events below go through the real listeners.
+test('an empty injection result after a cross-document commit is reported like a navigated timeout', async () => {
+  for (const empty of [null, undefined, { ok: false, error: 'no result from injected automation' }]) {
+    const m = loadActTimeout();
+    m.fire('committed', Date.now() + 50);
+    m.setTab({ url: 'https://shop.example/produkt/seagate-exos-16tb', title: 'Seagate Exos 16TB' });
+    const res = await m.runActStepWithDeadline(1, async () => empty, 5000, Date.now() - 60000,
+      { kind: 'click', urlBefore: 'https://shop.example/produkt/wd-12tb' });
+    assert.equal(res.ok, false);
+    assert.equal(res.actionTimedOut, true, 'the server counts a navigated step as done on this flag');
+    assert.equal(res.navigated, true);
+    assert.equal(res.reportLost, true);
+    assert.equal(res.urlAfter, 'https://shop.example/produkt/seagate-exos-16tb');
+    assert.equal(res.urlChanged, true);
+    assert.doesNotMatch(res.error, /did not report back within/, 'it answered, it did not time out');
+    assert.match(res.error, /page DID navigate/);
+  }
+});
+
+test('a pushState or hash commit with an empty result stays a failure', async () => {
+  for (const ev of ['history', 'fragment']) {
+    const m = loadActTimeout();
+    m.fire(ev, Date.now() + 50);
+    assert.ok(m.nav().lastCommitted, 'the same-document event is on record as a commit');
+    assert.equal(m.nav().lastDocCommitted, undefined, 'but not as a new document');
+    const res = await m.runActStepWithDeadline(1, async () => null, 5000, Date.now(), { kind: 'click' });
+    assert.equal(res, null, ev + ': the page kept its document, so the toolkit was never torn down');
+    const stub = await m.runActStepWithDeadline(
+      1, async () => ({ ok: false, error: 'no result from injected automation' }), 5000, Date.now(),
+      { kind: 'click' });
+    assert.equal(stub.actionTimedOut, undefined);
+    assert.equal(stub.error, 'no result from injected automation');
+  }
+});
+
+test('a cross-document commit still counts after a same-document one', async () => {
+  const m = loadActTimeout();
+  m.fire('history', Date.now() + 20);
+  m.fire('committed', Date.now() + 40);
+  m.fire('fragment', Date.now() + 60);
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, Date.now(), { kind: 'click' });
+  assert.equal(res.navigated, true);
+  assert.equal(res.reportLost, true);
+});
+
+test('a sub-frame commit never counts as the page being replaced', async () => {
+  const m = loadActTimeout();
+  m.fire('committed', Date.now() + 50, 3);
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, Date.now(), { kind: 'click' });
+  assert.equal(res, null);
+});
+
+// Chromium injects twice per step. A document swapped between the two makes the invoke run
+// without the toolkit and come back as the same bare null a page torn down mid-step gives.
+// The tell is the order of events: the cross-document commit landed no later than the
+// invoke's dispatch stamp (nav.invokeSentAt), where a mid-step commit lands after it.
+test('a commit that predates the invoke dispatch stays a failure, whatever the step kind', async () => {
+  for (const kind of ['click', 'fill', 'press']) {
+    const m = loadActTimeout();
+    const now = Date.now();
+    m.fire('committed', now + 10);
+    m.setNav(Object.assign({}, m.nav(), { invokeSentAt: now + 30 }));
+    const res = await m.runActStepWithDeadline(1, async () => null, 5000, now, { kind });
+    assert.equal(res.ok, false, kind);
+    assert.equal(res.actionTimedOut, undefined, kind + ': not a navigated step');
+    assert.equal(res.navigated, undefined, kind);
+    assert.equal(res.reportLost, undefined, kind);
+    assert.match(res.error, new RegExp('page was replaced before the ' + kind + ' step could run'));
+    assert.match(res.error, /nothing was done in it/);
+  }
+});
+
+test('a commit after the invoke dispatch is the page torn down mid-step', async () => {
+  const m = loadActTimeout();
+  const now = Date.now();
+  m.setNav({ invokeSentAt: now + 10 });
+  m.fire('committed', now + 80);
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, now, { kind: 'click' });
+  assert.equal(res.actionTimedOut, true);
+  assert.equal(res.navigated, true);
+  assert.equal(res.reportLost, true);
+});
+
+test('an invoke stamp from an EARLIER step says nothing about this one', async () => {
+  const m = loadActTimeout();
+  const now = Date.now();
+  m.setNav({ invokeSentAt: now - 4000 });
+  m.fire('committed', now + 60);
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, now, { kind: 'click' });
+  assert.equal(res.navigated, true);
+  assert.equal(res.reportLost, true);
+});
+
+test('the commit may land just after the empty result, and still counts', async () => {
+  const m = loadActTimeout();
+  const t = Date.now();
+  setTimeout(() => m.fire('committed', Date.now()), 120);
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, t, { kind: 'click' });
+  assert.equal(res.navigated, true);
+  assert.equal(res.reportLost, true);
+});
+
+test('the commit must postdate this step, not the batch', async () => {
+  const m = loadActTimeout();
+  // Committed 5 s ago, during an earlier step of the batch: this step did not cause it.
+  m.fire('committed', Date.now() - 5000);
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, Date.now() - 10000,
+    { kind: 'click' });
+  assert.equal(res, null, 'still the empty answer, left to the caller to call a failure');
+});
+
+test('an empty injection result with no commit stays a failure', async () => {
+  const m = loadActTimeout();
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, Date.now(), { kind: 'click' });
+  assert.equal(res, null);
+  const stub = await m.runActStepWithDeadline(
+    1, async () => ({ ok: false, error: 'no result from injected automation' }), 5000, Date.now(),
+    { kind: 'click' });
+  assert.equal(stub.actionTimedOut, undefined);
+  assert.equal(stub.error, 'no result from injected automation');
+});
+
+test('a real result is never second-guessed, even with a commit on record', async () => {
+  const m = loadActTimeout();
+  m.fire('committed', Date.now() + 50);
+  const res = await m.runActStepWithDeadline(1, async () => ({ ok: true, clicked: true }), 5000,
+    Date.now(), { kind: 'click' });
+  assert.deepEqual(JSON.parse(JSON.stringify(res)), { ok: true, clicked: true });
+  const failed = await m.runActStepWithDeadline(1, async () => ({ ok: false, error: 'nope' }), 5000,
+    Date.now(), { kind: 'click' });
+  assert.equal(failed.error, 'nope');
+});
+
+// The grace poll waits for a commit event that may trail the resolution. It must never be
+// what carries the step past its own deadline.
+test('the grace poll stays inside a nearly spent budget', async () => {
+  const m = loadActTimeout();
+  const t = Date.now();
+  // 700 ms budget, the step answers empty at 650 ms and no commit ever comes: an unclamped
+  // poll would run 600 ms more (1250 ms in all).
+  const res = await m.runActStepWithDeadline(1,
+    () => new Promise((r) => setTimeout(() => r(null), 650)), 700, t, { kind: 'click' });
+  const elapsed = Date.now() - t;
+  assert.equal(res, null);
+  assert.ok(elapsed < 850, 'step ran ' + elapsed + ' ms against a 700 ms budget');
+});
+
+test('a commit inside the clamped grace window still counts', async () => {
+  const m = loadActTimeout();
+  const t = Date.now();
+  setTimeout(() => m.fire('committed', Date.now()), 620);
+  const res = await m.runActStepWithDeadline(1,
+    () => new Promise((r) => setTimeout(() => r(null), 600)), 700, t, { kind: 'click' });
+  assert.equal(res.navigated, true);
+  assert.equal(res.reportLost, true);
+});
+
+// The tab can close between the empty answer and the report. The closed tab is then the
+// whole outcome: the step answered, so it neither timed out nor "was replaced".
+test('a tab closed during the report reads as closed, not as answered-with-nothing or timed out', async () => {
+  const m = loadActTimeout();
+  m.fire('committed', Date.now() + 50);
+  m.killTab();
+  const res = await m.runActStepWithDeadline(1, async () => null, 5000, Date.now(),
+    { kind: 'click', urlBefore: 'https://shop.example/listing' });
+  assert.equal(res.ok, false);
+  assert.equal(res.tabClosed, true);
+  assert.equal(res.timedOut, undefined, 'a step that answered did not time out');
+  assert.equal(res.actionTimedOut, undefined, 'the server prints TIMED OUT on this flag');
+  assert.equal(res.reportLost, undefined);
+  assert.doesNotMatch(res.error, /answered with nothing|replaced|did not report back/);
+  assert.match(res.error, /tab was closed/);
+  assert.match(res.error, /click step/);
+});
+
+test('a step that really timed out with its tab closed keeps the timeout flags', async () => {
+  const m = loadActTimeout();
+  m.killTab();
+  const res = await m.runActStepWithDeadline(1, () => new Promise(() => {}), 500, Date.now(),
+    { kind: 'click' });
+  assert.equal(res.tabClosed, true);
+  assert.equal(res.timedOut, true);
+  assert.equal(res.actionTimedOut, true);
+  assert.match(res.error, /did not report back/);
 });
 
 test('a timed-out step with network activity is distinguished from a dead one', async () => {
@@ -241,7 +446,8 @@ function loadActLoop() {
       setAutomation: (fn) => { automation = fn; },
       setWait: (fn) => { waitResult = fn; },
       setSettle: (v) => { settleResult = v; },
-      setTab: (t) => { tabState = Object.assign({}, tabState, t); }
+      setTab: (t) => { tabState = Object.assign({}, tabState, t); },
+      setNav: (v) => { TAB_NAV.set(1, v); }
     };
   `);
   return factory();
@@ -325,6 +531,30 @@ test('the server budget is threaded into per-step deadlines', async () => {
   assert.equal(out.results[0].actionTimedOut, true);
   assert.ok(sawBudget <= 3000 && sawBudget > 1000,
     `the step budget must come from the batch budget, got ${sawBudget}`);
+});
+
+test('runActSteps counts a navigating click that resolved empty as done-and-navigated', async () => {
+  const m = loadActLoop();
+  m.setTab({ url: 'https://shop.example/titled', title: 'Titled' });
+  m.setAutomation(async () => {
+    m.setNav({ lastCommitted: Date.now() + 10, lastDocCommitted: Date.now() + 10 });
+    return null;
+  });
+  const out = await m.runActSteps(1, { steps: [{ action: 'click', target: '#go' }] }, undefined);
+  assert.equal(out.ok, false, 'the extension reports the step as lost; the server resolves it');
+  assert.equal(out.results[0].actionTimedOut, true);
+  assert.equal(out.results[0].navigated, true);
+  assert.equal(out.results[0].urlAfter, 'https://shop.example/titled');
+  assert.notEqual(out.results[0].error, 'no result');
+});
+
+test('runActSteps keeps "no result" for an empty answer with no navigation behind it', async () => {
+  const m = loadActLoop();
+  m.setAutomation(async () => null);
+  const out = await m.runActSteps(1, { steps: [{ action: 'click', target: '#go' }] }, undefined);
+  assert.equal(out.results[0].ok, false);
+  assert.equal(out.results[0].error, 'no result');
+  assert.equal(out.results[0].navigated, undefined);
 });
 
 test('with no budget from the server, per-step defaults still bound the batch', async () => {

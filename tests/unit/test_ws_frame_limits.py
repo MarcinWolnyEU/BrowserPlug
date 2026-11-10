@@ -64,6 +64,22 @@ class _Running:
             pass
 
 
+async def _close_after_the_server_hung_up(sock):
+    """Close a client socket the server has already closed on us.
+
+    The server stops reading after the 1009 close, so the client may still hold an unsent
+    tail in its write buffer. CPython's selector transport then finishes closing without
+    counting the loss, and websockets' close() calls transport.abort() on it, which
+    dereferences the cleared loop (AttributeError ... 'call_soon'). The Proactor loop
+    (Windows) has no such path. The socket is gone either way, so only that error is
+    ignored."""
+    try:
+        await sock.close()
+    except AttributeError as e:
+        if "call_soon" not in str(e):
+            raise
+
+
 def _hello(instance_id="ff-a"):
     return {"type": "extension_hello",
             "data": {"version": "1.9.1", "instance_id": instance_id}}
@@ -135,7 +151,8 @@ async def test_an_oversize_close_tells_the_waiting_caller_why():
     """The 1009 close must fail the in-flight request with a readable reason."""
     async with _Running(strict=True) as run:
         from server.ws import ws_limits
-        async with websockets.connect(run.url, max_size=None) as sock:
+        sock = await websockets.connect(run.url, max_size=None)
+        try:
             await SecureClient.connect(sock, device_token(run.server), _hello("ff-big"))
             await _wait_until(lambda: "ff-big" in run.server.browsers, "the browser registered")
             fut = asyncio.get_event_loop().create_future()
@@ -143,6 +160,8 @@ async def test_an_oversize_close_tells_the_waiting_caller_why():
             run.server.rpc.pending_owners["rid-1"] = "ff-big"
             await sock.send(b"\x00" * (ws_limits.POST_AUTH_MAX_MESSAGE_BYTES + 1024))
             result = await asyncio.wait_for(fut, timeout=8)
+        finally:
+            await _close_after_the_server_hung_up(sock)
         message = result["error"]
         assert "too large" in message and "MiB" in message, message
         assert "closed, restarted" not in message, "not the generic disconnect text"

@@ -341,3 +341,93 @@ def test_the_launch_wait_is_clamped(monkeypatch):
     assert db.launch_wait_seconds() == db.LAUNCH_WAIT_DEFAULT
     monkeypatch.delenv(db.LAUNCH_WAIT_ENV, raising=False)
     assert db.launch_wait_seconds() == db.LAUNCH_WAIT_DEFAULT
+
+
+# --- macOS: the browser starts through `open`, not as a bare executable -------------------
+
+def _mac_pin(tmp_path, args=""):
+    exe = tmp_path / "Firefox Developer Edition.app" / "Contents" / "MacOS" / "firefox"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    # Forward slashes: the code reads a Mac path, and a Windows tmp_path spells it with
+    # backslashes that the code normalizes away.
+    return (str(tmp_path / "Firefox Developer Edition.app").replace("\\", "/"), db.normalize(
+        {"mode": "pinned", "instance_id": "b", "exe_path": str(exe), "auto_launch": True,
+         "launch_args": args}))
+
+
+def test_on_a_mac_a_bundle_is_started_with_open(monkeypatch, tmp_path):
+    monkeypatch.setattr(db.sys, "platform", "darwin")
+    bundle, settings = _mac_pin(tmp_path, "-P work")
+    argv, reason = db.launch_command(settings)
+    assert reason is None
+    # -n: a running browser hands the request to the running instance and the new
+    # process exits, as it does when the binary is started directly.
+    assert argv == ["/usr/bin/open", "-n", "-a", bundle, "--args", "-P", "work"]
+
+
+def test_on_a_mac_no_arguments_means_no_args_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(db.sys, "platform", "darwin")
+    bundle, settings = _mac_pin(tmp_path)
+    assert db.launch_command(settings)[0] == ["/usr/bin/open", "-n", "-a", bundle]
+
+
+def test_on_a_mac_a_program_outside_any_bundle_is_started_directly(monkeypatch, tmp_path):
+    monkeypatch.setattr(db.sys, "platform", "darwin")
+    exe = tmp_path / "bin" / "firefox"
+    exe.parent.mkdir()
+    exe.write_text("")
+    settings = db.normalize({"mode": "pinned", "instance_id": "b", "exe_path": str(exe),
+                             "auto_launch": True, "launch_args": "-P work"})
+    assert db.launch_command(settings)[0] == [str(exe), "-P", "work"]
+
+
+def test_on_a_mac_a_pin_recorded_from_a_code_sign_clone_launches_the_installed_copy(
+        monkeypatch, tmp_path):
+    from server.browsers import mac_bundle
+    monkeypatch.setattr(db.sys, "platform", "darwin")
+    app = tmp_path / "Google Chrome Canary.app"
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    (app / "Contents" / "MacOS" / "Google Chrome Canary").write_text("")
+    monkeypatch.setattr(mac_bundle, "_INSTALL_DIRS", (str(tmp_path),))
+    clone = ("/private/var/folders/x/com.google.Chrome.canary.code_sign_clone/code_sign_clone.A/"
+             "Google Chrome Canary.app.bundle/Contents/MacOS/Google Chrome Canary")
+    settings = db.normalize({"mode": "pinned", "instance_id": "b", "exe_path": clone,
+                             "auto_launch": True})
+    argv, reason = db.launch_command(settings)
+    assert reason is None
+    assert argv == ["/usr/bin/open", "-n", "-a", str(app).replace("\\", "/")]
+
+
+def test_off_a_mac_a_bundle_path_is_still_the_program(monkeypatch, tmp_path):
+    monkeypatch.setattr(db.sys, "platform", "win32")
+    bundle, settings = _mac_pin(tmp_path)
+    argv, _ = db.launch_command(settings)
+    assert argv == [settings["exe_path"]]
+
+
+@pytest.mark.parametrize("status,raises", [(0, False), (1, True), (-9, True)])
+def test_open_that_fails_is_a_failed_start(monkeypatch, status, raises):
+    monkeypatch.setattr(db.subprocess, "Popen",
+                        lambda *a, **k: SimpleNamespace(wait=lambda timeout=None: status))
+    if raises:
+        with pytest.raises(OSError, match="open exited"):
+            db._start(["/usr/bin/open", "-n", "-a", "/Applications/X.app"])
+    else:
+        db._start(["/usr/bin/open", "-n", "-a", "/Applications/X.app"])
+
+
+def test_open_that_is_slow_to_answer_is_left_to_the_connect_wait(monkeypatch):
+    def wait(timeout=None):
+        raise db.subprocess.TimeoutExpired("open", timeout)
+
+    monkeypatch.setattr(db.subprocess, "Popen", lambda *a, **k: SimpleNamespace(wait=wait))
+    db._start(["/usr/bin/open", "-n", "-a", "/Applications/X.app"])      # no exception
+
+
+def test_a_direct_start_does_not_wait_for_the_program(monkeypatch):
+    waited = []
+    monkeypatch.setattr(db.subprocess, "Popen",
+                        lambda *a, **k: SimpleNamespace(wait=lambda timeout=None: waited.append(1)))
+    db._start([r"C:\ff\firefox.exe"])
+    assert waited == []

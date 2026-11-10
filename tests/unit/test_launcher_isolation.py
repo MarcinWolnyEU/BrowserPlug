@@ -331,7 +331,7 @@ class TestServerOwnership:
         a bare interpreter, with psutil nowhere, still refuses what is not its server."""
         from browserplug_shared import proc_facts
         monkeypatch.setitem(sys.modules, "psutil", None)      # import psutil -> ImportError
-        if os.name == "nt" or sys.platform.startswith("linux"):
+        if os.name == "nt" or sys.platform.startswith("linux") or sys.platform == "darwin":
             assert mcp_port.server_pid_is_ours(os.getpid(), self.ROOT) is False
             assert proc_facts.facts(os.getpid())[0] is True
         else:

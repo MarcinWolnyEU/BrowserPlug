@@ -57,6 +57,9 @@ function loadArming(queue, frames) {
     // Declared outside the sliced region in the product (it sits next to getApiSupport,
     // its reader). The slice ASSIGNS it, which is the behaviour under test.
     let CONTENT_DOC_ID_SUPPORT = null;
+    // runAutomation stamps nav.invokeSentAt here (the step deadline reads it); declared
+    // beside the webNavigation listeners in the product.
+    const TAB_NAV = new Map();
     // Chromium injects TWICE per runAutomation: files= to ensure the toolkit is present,
     // then func= to invoke it. Only the second carries a payload, and it arrives wrapped
     // in an InjectionResult ({result}), unlike gecko's bare value.
@@ -325,6 +328,7 @@ function loadCompile({ toggle = true, execute } = {}) {
     const userScriptsAvailable = () => __toggle;
     const ensureUserScriptWorld = async () => {};
     let CONTENT_DOC_ID_SUPPORT = null;
+    const TAB_NAV = new Map();   // runAutomation stamps nav.invokeSentAt (see loadArming)
     const executeScriptWithRetry = async (opts) => {
       if (opts.files) return [{}];
       __calls.push(opts);

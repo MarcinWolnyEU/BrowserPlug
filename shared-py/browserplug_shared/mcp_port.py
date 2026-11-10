@@ -26,6 +26,9 @@ import os
 import socket
 import urllib.request
 
+from browserplug_shared import bsd_bind
+from browserplug_shared.version import HEALTH_IDENTITY_HEADER, HEALTH_IDENTITY_VALUE
+
 MCP_PORT_ENV = "BROWSERPLUG_MCP_PORT"
 MCP_PORT_DEFAULT = 2830
 MCP_PORT_LAST = 2942  # inclusive: the last port the search/seek will ever touch
@@ -109,9 +112,18 @@ def port_is_bindable(port, host="localhost"):
         and we would relocate for no reason. It is also exactly what asyncio sets when it
         really binds on POSIX, so the probe answers the question we are actually asking.
         (Windows has no such need: a listening bind there is not blocked by TIME_WAIT.)
+      * **macOS (BSD): the SO_REUSEADDR probe above lies**, because BSD lets a reuse bind
+        sit beside a live listener on an overlapping address (127.0.0.1 under 0.0.0.0, or
+        the reverse). bsd_bind.classify separates a TIME_WAIT leftover from a live
+        overlapping listener by a strict bind plus a loopback connect, and this probe
+        reports the port busy for the second. Linux and Windows do not take that branch.
     """
     for family, addr in _bind_targets(host):
         try:
+            if bsd_bind.applies():
+                if bsd_bind.classify(family, addr, port) == bsd_bind.OVERLAP:
+                    return False
+                continue
             with socket.socket(family, socket.SOCK_STREAM) as sock:
                 if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -123,6 +135,25 @@ def port_is_bindable(port, host="localhost"):
                 continue  # no IPv6 stack / address unavailable; not a "busy" answer
             return False
     return True
+
+
+def overlapping_listener(port, host="localhost"):
+    """True when a live listener on an overlapping address holds `port` (macOS only).
+
+    The one hole port_is_bindable's callers cannot see on a BSD stack: the real bind sets
+    SO_REUSEADDR and succeeds beside it. An identical-address holder, or any other bind
+    error, is left to the real bind to report. Always False on Linux and Windows, where
+    the kernel refuses the overlap itself.
+    """
+    if not bsd_bind.applies():
+        return False
+    for family, addr in _bind_targets(host):
+        try:
+            if bsd_bind.classify(family, addr, port) == bsd_bind.OVERLAP:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def find_mcp_port(start_port=MCP_PORT_DEFAULT, last_port=MCP_PORT_LAST, host="localhost"):
@@ -157,12 +188,18 @@ def health_url(port, host="localhost"):
     return f"http://{connect_host(host)}:{port}/health"
 
 
-def browserplug_health(port, timeout=SEEK_TIMEOUT_SECONDS, host="localhost"):
+def browserplug_health(port, timeout=SEEK_TIMEOUT_SECONDS, host="localhost", identity=False):
     """GET /health on this port, and return it ONLY if a BrowserPlug server answered.
 
     The identity check is `service == "browserplug"` plus a status of ok or degraded.
     "Something answered on 2830" is not identification: a stranger's dev server would
     otherwise be proxied to as if it were ours.
+
+    `identity=True` asks for the identity-only reply (service, status, server_pid, version,
+    ports, tools_signature): the server builds it without touching anything slow, where the
+    full report reads the network, the process table and the disk. A probe with a
+    sub-second budget that only needs to know whether a BrowserPlug server is there, and
+    which process it is, should ask for it; a caller that reads the roster must not.
 
     Proxy-BLIND on purpose. urlopen's default opener honours HTTP_PROXY/http_proxy from
     the environment, so on a corporate-proxy machine with no NO_PROXY for localhost this
@@ -174,7 +211,9 @@ def browserplug_health(port, timeout=SEEK_TIMEOUT_SECONDS, host="localhost"):
     """
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(health_url(port, host), timeout=timeout) as r:
+        headers = {HEALTH_IDENTITY_HEADER: HEALTH_IDENTITY_VALUE} if identity else {}
+        request = urllib.request.Request(health_url(port, host), headers=headers)
+        with opener.open(request, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
@@ -511,10 +550,10 @@ def server_pid_is_ours(pid, project_root, probe=None, port=None, listener_probe=
     checkout as cwd) and whose owner is the current user.
 
     The facts come from proc_facts (`probe(pid) -> (same_user, argv, cwd)` replaces it in
-    tests), which reads them with the standard library on Windows and Linux. Anything
-    unverifiable is foreign. The one exception is a platform with no native probe and no
-    psutil (macOS on a bare interpreter): there nothing can check, so /health is trusted
-    and a warning says so once.
+    tests), which reads them with the standard library on Windows, Linux and macOS.
+    Anything unverifiable is foreign. The one exception is a platform with no native probe
+    and no psutil (a BSD, or a macOS where libproc cannot be loaded): there nothing can
+    check, so /health is trusted and a warning says so once.
 
     The pid is only what /health CLAIMS: any process that binds a port in the range can
     quote the real server's pid. So with a `port` the pid must also be the owner of the
@@ -585,9 +624,10 @@ def _warn_no_probe_once():
     import logging
     import sys
     logging.getLogger(__name__).warning(
-        "%s has no native process probe and psutil is not importable in this interpreter, "
-        "so a BrowserPlug-looking /health is trusted without checking which process answers "
-        "it. Installing psutil for this interpreter turns the check on.", sys.platform)
+        "There is no native process probe on %s (or it could not load) and psutil is not "
+        "importable in this interpreter, so a BrowserPlug-looking /health is trusted without "
+        "checking which process answers it. Installing psutil for this interpreter turns the "
+        "check on.", sys.platform)
 
 
 _warned_no_socket_table = False

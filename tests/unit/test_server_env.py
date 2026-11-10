@@ -431,8 +431,12 @@ def test_no_bare_interpreter_registration_is_advised_where_it_loses_the_safety_n
     """A bare interpreter has no psutil on macOS or a BSD: the launcher could neither check
     which process answers /health nor see that the environment is in use. Preflight then
     recommends the `uv run --script` form, whose PEP 723 block installs psutil on darwin."""
-    monkeypatch.setattr(server_env.sys, "platform", platform)
     uv = FakeUv(box)
+    assert server_env.launcher_python(str(box.root), uv=str(box.uv), runner=uv,
+                                      platform=platform) == (None, None)
+    assert uv.calls == []
+    # With no platform named, the host's own is used.
+    monkeypatch.setattr(server_env.sys, "platform", platform)
     assert server_env.launcher_python(str(box.root), uv=str(box.uv), runner=uv) == (None, None)
     assert uv.calls == []
 
@@ -1153,10 +1157,16 @@ def test_the_server_minor_comes_from_its_requires_python(box, tmp_path):
     assert server_env.server_python_minor(str(tmp_path / "nowhere")) is None
 
 
+# launcher_python answers only on Windows and Linux (a bare interpreter has no psutil on macOS
+# or a BSD; see test_no_bare_interpreter_registration_is_advised_where_it_loses_the_safety_nets).
+# The tests of its answer name the platform they stand for instead of inheriting the host's.
+SUPPORTED = "win32" if os.name == "nt" else "linux"
+
+
 def test_launcher_python_answers_uvs_minor_version_link(box):
     uv = FakeUv(box)
-    assert server_env.launcher_python(str(box.root), uv=str(box.uv), runner=uv) == \
-        (JUNCTION, None)
+    assert server_env.launcher_python(str(box.root), uv=str(box.uv), runner=uv,
+                                      platform=SUPPORTED) == (JUNCTION, None)
     [(_kind, argv, cwd, _timeout, env)] = uv.calls
     assert argv[1:] == ["python", "find", "--system", "--managed-python",
                         "--no-python-downloads", "3.12"]
@@ -1170,14 +1180,16 @@ def test_launcher_python_answers_uvs_minor_version_link(box):
 ], ids=["patch-directory", "none"])
 def test_launcher_python_says_how_to_get_the_link(box, answer, words):
     python, why = server_env.launcher_python(str(box.root), uv=str(box.uv),
-                                             runner=FakeUv(box, find=[answer]))
+                                             runner=FakeUv(box, find=[answer]),
+                                             platform=SUPPORTED)
     assert python is None
     assert words in why and "uv python install 3.12" in why
 
 
 def test_launcher_python_never_raises(box):
     python, why = server_env.launcher_python(str(box.root), uv=str(box.uv),
-                                             runner=FakeUv(box, find=[RuntimeError("boom")]))
+                                             runner=FakeUv(box, find=[RuntimeError("boom")]),
+                                             platform=SUPPORTED)
     assert python is None and "boom" in why
 
 
@@ -1225,7 +1237,7 @@ class UvBox:
 
     def launcher(self, **kw):
         return server_env.launcher_python(str(self.box.root), uv=str(self.box.uv),
-                                          runner=self, **kw)
+                                          runner=self, platform=SUPPORTED, **kw)
 
 
 def test_the_real_server_block_admits_3_11_and_3_12():
@@ -1466,7 +1478,9 @@ def test_real_uv_cache_prune_and_clean_leave_the_environment_whole(real):
     python = real.ensure(imports=("tinypkg",))
     real.uv_cache("prune")
     real.uv_cache("clean")
-    assert not real.cache.exists() or not any(real.cache.iterdir())
+    # What `clean` leaves behind depends on the uv version: no directory, an empty one
+    # (0.12 can), or one holding only its `.lock` file (0.13).
+    assert not real.cache.exists() or [p.name for p in real.cache.iterdir()] in ([], [".lock"])
     out = subprocess.run([python, "-I", "-c", "import tinypkg; print(tinypkg.VERSION)"],
                          **real.run)
     assert out.stdout.strip() == "1.0", out.stderr
@@ -1575,9 +1589,17 @@ def test_real_uv_rebuilds_an_environment_whose_python_is_truncated_or_junk(real,
                      "half": original[:len(original) // 2]}[damage])
     notes = []
     assert real.ensure(notes) == python
-    assert any("damaged" in n for n in notes), notes
+    if os.name == "nt":
+        # uv fails on the unusable exe ("failed to inspect python interpreter"), so the
+        # module deletes the environment itself and says so.
+        assert any("damaged" in n for n in notes), notes
+    # On macOS and Linux uv (0.12.18 and 0.13.7 alike) reports `Would replace script
+    # environment` for the same damage and rebuilds it in the sync, so no "damaged" note is
+    # written; the result is what counts.
     out = subprocess.run([python, "-I", "-c", "print(1)"], **real.run)
     assert out.stdout.strip() == "1", out.stderr
+    again = []
+    assert real.ensure(again) == python and again == []
 
 
 @pytest.mark.skipif(os.name != "nt", reason="a sharing violation on the exe is a Windows thing")

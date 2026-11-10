@@ -25,8 +25,10 @@ dance, so there is no bootstrap-Firefox phase and no dead-SOCKS block to manage.
 
 import os
 import json
+import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import atexit
 import threading
@@ -37,6 +39,8 @@ from pathlib import Path
 
 from test_config import FIREFOX_TEST_CONFIG, get_firefox_test_port
 from port_coordinator import FirefoxPortCoordinator, coordinated_mcp_port
+from browser_procs import group_popen_kwargs, stop_process_group, kill_user_data_dir_stragglers
+from chrome_cdp_pipe import PIPE_FLAGS, DevToolsPipe
 
 project_root = Path(__file__).resolve().parent.parent
 
@@ -48,8 +52,27 @@ DEFAULT_EXTENSION_WS_PORT = 8772
 # The MV3 source tree the harness bakes from.
 _CHROMIUM_EXT_DIR = project_root / 'extension-chromium'
 
-# The vendored Chrome for Testing binary (v154), used when CHROME_PATH is unset.
-_DIST_CHROME = project_root / 'dist' / 'chrome-for-testing' / 'chrome-win64' / 'chrome.exe'
+# Where scripts/fetch-chrome-for-testing.sh unpacks Chrome for Testing; the zip's own
+# top-level directory (chrome-win64/, chrome-mac-arm64/, ...) sits directly under it.
+_DIST_CHROME_DIR = project_root / 'dist' / 'chrome-for-testing'
+
+_MAC_CFT_APP = 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
+
+
+def _dist_chrome_candidates():
+    """The vendored Chrome for Testing binaries this platform could have, best match first.
+
+    Mirrors the layouts the fetch script writes for every platform it supports, so
+    CHROME_PATH is optional on Windows, Linux and macOS alike. The other CPU's build is
+    listed last: an x64 Chrome runs under Rosetta on Apple silicon, and win32 on win64."""
+    if sys.platform == 'win32':
+        return [_DIST_CHROME_DIR / 'chrome-win64' / 'chrome.exe',
+                _DIST_CHROME_DIR / 'chrome-win32' / 'chrome.exe']
+    if sys.platform == 'darwin':
+        arm = platform.machine().lower() in ('arm64', 'aarch64')
+        slugs = ['mac-arm64', 'mac-x64'] if arm else ['mac-x64', 'mac-arm64']
+        return [_DIST_CHROME_DIR / f'chrome-{slug}' / _MAC_CFT_APP for slug in slugs]
+    return [_DIST_CHROME_DIR / 'chrome-linux64' / 'chrome']
 
 
 def resolve_chrome_binary(explicit=None):
@@ -64,7 +87,7 @@ def resolve_chrome_binary(explicit=None):
     env = os.environ.get('CHROME_PATH')
     if env:
         candidates.append(env)
-    candidates.append(str(_DIST_CHROME))
+    candidates.extend(str(c) for c in _dist_chrome_candidates())
     for name in ('chrome', 'chrome.exe', 'google-chrome', 'chromium', 'chromium-browser'):
         which = shutil.which(name)
         if which:
@@ -77,6 +100,27 @@ def resolve_chrome_binary(explicit=None):
         if os.path.exists(expanded):
             return expanded
     return None
+
+
+def extension_loader(chrome_path):
+    """How the baked extension gets into this browser: 'flag' (--load-extension) or 'pipe'
+    (DevTools Extensions.loadUnpacked, see chrome_cdp_pipe.py).
+
+    Chrome for Testing and Chromium honour the flag. Branded Chrome ignores it, so on macOS
+    anything else (Canary, Beta, Stable) takes the pipe. BROWSERPLUG_CHROME_LOADER=flag|pipe
+    overrides the choice, except on Windows, which always uses the flag: the pipe needs
+    `pass_fds`, which Windows does not support."""
+    forced = os.environ.get('BROWSERPLUG_CHROME_LOADER')
+    if sys.platform.startswith('win'):
+        if forced == 'pipe':
+            print("BROWSERPLUG_CHROME_LOADER=pipe is ignored on Windows: using --load-extension")
+        return 'flag'
+    if forced in ('flag', 'pipe'):
+        return forced
+    if sys.platform != 'darwin':
+        return 'flag'
+    name = os.path.basename(str(chrome_path)).lower()
+    return 'flag' if ('testing' in name or 'chromium' in name) else 'pipe'
 
 
 class ChromiumTestManager:
@@ -97,6 +141,8 @@ class ChromiumTestManager:
     _session_lock = threading.Lock()
 
     _EXTENSION_ID = 'browserplug@marcinwolny.net'   # gecko id; kept for parity of diagnostics only
+
+    _devtools = None   # the DevToolsPipe of a browser started with the 'pipe' loader
 
     def __init__(self, chrome_path=None, test_port=None, coordination_file=None,
                  profile_tag=None, firefox_path=None, mcp_port=None):
@@ -243,20 +289,30 @@ class ChromiumTestManager:
         print(f"✓ Pre-configured chromium extension for test server port {self.test_port}")
 
     # ---- launch / relaunch -------------------------------------------------------
-    def _launch_flags(self, headless):
+    def _launch_flags(self, headless, loader=None):
+        loader = loader or extension_loader(self.chrome_path)
         flags = [
             self.chrome_path,
             f"--user-data-dir={self.user_data_dir}",
-            f"--load-extension={self.baked_dir}",
-            f"--disable-extensions-except={self.baked_dir}",
             "--no-first-run",
             "--no-default-browser-check",
             "--silent-debugger-extension-api",
         ]
+        if loader == 'pipe':
+            flags += PIPE_FLAGS     # the extension is loaded over the pipe after launch
+        else:
+            flags += [f"--load-extension={self.baked_dir}",
+                      f"--disable-extensions-except={self.baked_dir}"]
         # --headless=new is the verified-working mode; a non-headless run (debugging) just
         # drops the flag.
         if headless:
             flags.insert(1, "--headless=new")
+        if sys.platform == 'darwin':
+            # Without a mock keychain Chrome's network service waits on the login keychain
+            # ("Chrome Safe Storage"), which a test run cannot answer: the extension's
+            # service worker loads but never opens its WebSocket (measured on Chrome for
+            # Testing 157). Puppeteer and Playwright pass the same two flags.
+            flags += ["--use-mock-keychain", "--password-store=basic"]
         return flags
 
     def _start_firefox(self, headless=True, wait_for_startup=True):
@@ -278,14 +334,24 @@ class ChromiumTestManager:
         # Fail-closed: never launch a browser whose config does not pin the test port.
         self._bake_config()
 
-        flags = self._launch_flags(headless)
+        loader = extension_loader(self.chrome_path)
+        flags = self._launch_flags(headless, loader)
         # Capture Chrome's stdout/stderr for post-mortem on a connection failure. No extra
         # logging flags are added (Chrome behavior unchanged); this just catches crashes.
         try:
             self._chrome_log_path = os.path.join(self.user_data_dir, 'chrome-stdouterr.log')
             self._chrome_log_handle = open(self._chrome_log_path, 'wb')
-            self.firefox_process = subprocess.Popen(
-                flags, stdout=self._chrome_log_handle, stderr=subprocess.STDOUT)
+            # Own process group on POSIX, so stop_firefox can take Chrome's helpers down too.
+            if loader == 'pipe':
+                self._devtools = DevToolsPipe()
+                self.firefox_process = self._devtools.popen(
+                    flags, stdout=self._chrome_log_handle, stderr=subprocess.STDOUT,
+                    **group_popen_kwargs())
+                self._devtools.call('Extensions.loadUnpacked', {'path': self.baked_dir})
+            else:
+                self.firefox_process = subprocess.Popen(
+                    flags, stdout=self._chrome_log_handle, stderr=subprocess.STDOUT,
+                    **group_popen_kwargs())
         except Exception as e:
             print(f"✗ Failed to start Chrome: {e}")
             return False
@@ -310,7 +376,8 @@ class ChromiumTestManager:
         """
         self.chrome_path = self.chrome_path or resolve_chrome_binary()
         if not self.chrome_path or not os.path.exists(self.chrome_path):
-            print(f"✗ Chromium binary not found (looked at CHROME_PATH, {_DIST_CHROME}, PATH)")
+            looked = ', '.join(str(c) for c in _dist_chrome_candidates())
+            print(f"✗ Chromium binary not found (looked at CHROME_PATH, {looked}, PATH)")
             if skip_on_failure:
                 return False
             raise RuntimeError("Chromium binary not found")
@@ -398,29 +465,35 @@ class ChromiumTestManager:
         """Kill the Chrome PROCESS TREE (parent + renderers/gpu/utility children).
 
         Chrome forks helper processes; terminate() on the parent alone orphans them, so we
-        taskkill /T the tree on Windows and fall back to killpg elsewhere.
+        taskkill /T the tree on Windows. On POSIX Chrome started in its own process group
+        (_start_firefox), so the group gets SIGTERM, then SIGKILL, and a final sweep by
+        --user-data-dir catches a helper that left the group.
         """
         proc = self.firefox_process
         if not proc:
             return
         try:
-            if proc.poll() is None:
-                if os.name == 'nt':
+            if os.name == 'nt':
+                if proc.poll() is None:
                     subprocess.run(
                         ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+            else:
+                stop_process_group(proc, timeout=10)
+                kill_user_data_dir_stragglers(self.user_data_dir)
             print("✓ Chrome stopped")
         except Exception as e:
             print(f"⚠ Error stopping Chrome: {e}")
         finally:
             self.firefox_process = None
+            if self._devtools:
+                self._devtools.close()
+                self._devtools = None
             if self._chrome_log_handle:
                 try:
                     self._chrome_log_handle.close()

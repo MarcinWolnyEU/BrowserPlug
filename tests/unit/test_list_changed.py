@@ -390,12 +390,23 @@ async def test_steady_flapping_is_announced_within_the_cap(monkeypatch, small_de
     tools, roster = _server().mcp_tools, Roster(monkeypatch)
     heard = Heard()
 
+    def pause(seconds):
+        # Not time.sleep: on a macOS box that runs with no foreground app, sleep(0.05)
+        # returns after 55-200 ms (timer coalescing), which is longer than the quiet period,
+        # so every change would be announced on its own and the cap would never come into play.
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            time.sleep(0)
+
+    changes = []   # when each change was made, so the real gap between two can be measured
+
     def flap(until):
         i = 0
         while time.monotonic() < until:
+            changes.append(time.monotonic())
             reshape(tools, roster, f"flap {i}")
             i += 1
-            time.sleep(0.05)
+            pause(0.05)
 
     async with tools.mcp.list_changed.running():
         async with Client(tools.mcp, mode="legacy", message_handler=heard):
@@ -403,6 +414,12 @@ async def test_steady_flapping_is_announced_within_the_cap(monkeypatch, small_de
             await asyncio.to_thread(flap, started + 1.5)
             stopped = time.monotonic()
             await asyncio.sleep(0.6)
+    # From one change to the next, reshape() itself included: that is the quiet time the
+    # debounce sees, and timing pause() alone would miss a slow reshape.
+    longest = max(later - earlier for earlier, later in zip(changes, changes[1:]))
+    assert longest < list_changed_policy.QUIET_SECONDS, (
+        f"{longest:.3f} s passed between two changes, so the quiet period elapsed and the "
+        "premise of this test (it never does) did not hold")
     during = [t for t in heard.at if t < stopped]
     assert during, "the cap must announce before the flapping stops"
     assert during[0] - started < 1.0

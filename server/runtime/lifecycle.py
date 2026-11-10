@@ -18,6 +18,7 @@ the values after construction), and `main()` receives the server class as an arg
 
 import argparse
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -31,13 +32,13 @@ from typing import Any, Callable
 import uvicorn
 import websockets
 
-from browserplug_shared import server_env
+from browserplug_shared import bsd_bind, server_env, socket_table
 from browserplug_shared.config_store import state_dir
 from browserplug_shared.mcp_port import (DETACHED_ENV, MCP_PORT_DEFAULT, MCP_PORT_ENV, MCP_PORT_LAST,
                                          browserplug_health, detached_spawn_kwargs, find_mcp_port,
-                                         pinned_mcp_port, port_is_bindable, port_is_occupied, resolve_log_path,
-                                         restart_log_file, seek_browserplug, startup_log_glob,
-                                         spawn_startup_log_path, instance_lock_path)
+                                         overlapping_listener, pinned_mcp_port, port_is_bindable, port_is_occupied,
+                                         resolve_log_path, restart_log_file, seek_browserplug,
+                                         startup_log_glob, spawn_startup_log_path, instance_lock_path)
 from browserplug_shared.ws_token import WS_HOST_ENV
 
 from server.ws import http_auth
@@ -179,12 +180,34 @@ def is_port_in_use(port, host="localhost"):
     return port_is_occupied(port, host)
 
 
+def ws_addresses_for_bind(addresses, port):
+    """The WebSocket bind list, vetted for macOS; `addresses` untouched elsewhere.
+
+    BSD lets asyncio's SO_REUSEADDR bind sit beside a live listener on an overlapping
+    address, so a stranger on 0.0.0.0:8772 (or 127.0.0.1:8772 when we bind the wildcard)
+    would share the port with us without a word. Refuse to start beside one. When we bind
+    a wildcard ourselves, also hold 127.0.0.1 and ::1: a later SO_REUSEADDR squatter on a
+    loopback address would otherwise take every local connection, our extension's included,
+    and BSD refuses it an address we already hold. Blocking socket calls; run off the loop.
+    """
+    if not bsd_bind.applies():
+        return addresses
+    for host in ([addresses] if isinstance(addresses, str) else addresses):
+        if overlapping_listener(port, host):
+            raise OSError(
+                errno.EADDRINUSE,
+                f"another process is already listening on port {port} on an address that "
+                f"overlaps {host!r} (macOS lets both bind; one would shadow the other). "
+                f"Stop it: only one BrowserPlug server may own the extension WebSocket port.")
+    return bsd_bind.with_loopback_siblings(addresses)
+
+
 def pid_listening_on_port(port):
     """PID of the process LISTENing on the given local port (or None)."""
     try:
-        import psutil
-        for c in psutil.net_connections(kind='inet'):
-            if c.laddr and c.laddr.port == port and c.status == psutil.CONN_LISTEN and c.pid:
+        for c in socket_table.tcp_connections():
+            if (c.laddr and c.laddr.port == port and c.status == socket_table.CONN_LISTEN
+                    and c.pid):
                 return c.pid
     except Exception:
         pass
@@ -876,12 +899,32 @@ class ServerLifecycle:
                     self.restarting = False
 
         loop = self.ws_loop
-        if loop is None or loop.is_closed():
-            # No WebSocket loop: an embedded server (tests) or one that never started.
-            # Nothing to close there, so a private loop runs the same sequence.
-            threading.Thread(target=lambda: asyncio.run(run()), daemon=True).start()
-        else:
-            asyncio.run_coroutine_threadsafe(run(), loop)
+        sequence = None
+        try:
+            if loop is None or loop.is_closed():
+                # No WebSocket loop: an embedded server (tests) or one that never started.
+                # Nothing to close there, so a private loop runs the same sequence. The
+                # coroutine is made inside the thread, so a thread that never runs leaves
+                # no unawaited coroutine behind.
+                threading.Thread(target=lambda: asyncio.run(run()), daemon=True).start()
+            else:
+                sequence = run()
+                asyncio.run_coroutine_threadsafe(sequence, loop)
+        except BaseException as e:
+            # Only run()'s finally clears `restarting`, and run() never started: left set,
+            # every later /restart and /shutdown would answer 409 for the rest of the
+            # server's life. Nothing was closed or announced, so the server keeps serving.
+            if sequence is not None:
+                sequence.close()
+            error = f"restart failed: could not start the sequence: {e!r}"
+            logger.exception("Restart (%s) could not be scheduled", trigger)
+            with self._restart_lock:
+                self.restarting = False
+            self.last_restart = self._restart_record(trigger, "aborted", error)
+            if not verdict.done():
+                verdict.set_result(error)
+            if not isinstance(e, Exception):
+                raise
         return verdict
 
     def restart_onto(self, host):
@@ -988,13 +1031,19 @@ class ServerLifecycle:
         #   * Windows: no SO_REUSEADDR (asyncio never sets it there) → nobody binds
         #     over us. Nothing is lost: a listening bind on Windows is not blocked by
         #     TIME_WAIT, so restarts still take the port back immediately.
-        #   * POSIX: SO_REUSEADDR (asyncio's default), which there only means "reuse a
-        #     TIME_WAIT port". It cannot bind over an active listener, so fast restart
-        #     keeps working and the steal is impossible anyway.
+        #   * POSIX: SO_REUSEADDR (asyncio's default). On Linux it only means "reuse a
+        #     TIME_WAIT port" and cannot bind over an active listener, so fast restart
+        #     keeps working and the steal is impossible.
+        #     macOS (BSD) differs: its SO_REUSEADDR lets a bind overlap a live listener
+        #     (127.0.0.1 beside 0.0.0.0), so ws_addresses_for_bind refuses to start
+        #     beside one and holds the loopback addresses itself under a wildcard.
         # See mcp_port.port_is_bindable for the same reasoning on the probe side.
+        ws_addresses = ws_bind_addresses(h.ws_host())
+        if bsd_bind.applies():
+            ws_addresses = await asyncio.to_thread(ws_addresses_for_bind, ws_addresses, h.port())
         self.websocket_server = await websockets.serve(
             h.ws_handler,
-            ws_bind_addresses(h.ws_host()),
+            ws_addresses,
             h.port(),
             process_request=h.ws_process_request,
             # Ciphertext does not compress, and a browser's inflate limit then refuses
@@ -1141,7 +1190,7 @@ async def main(server_factory, argv=None):
         health, health_where = None, health_url
         if http_enabled:
             if requested_mcp_port is not None:
-                health = browserplug_health(requested_mcp_port, timeout=2.0)
+                health = browserplug_health(requested_mcp_port, timeout=2.0, identity=True)
             else:
                 found_port, health = seek_browserplug()
                 if found_port is not None:
@@ -1183,7 +1232,8 @@ async def main(server_factory, argv=None):
     # up the 2830-2942 range and clients seek it there.
     if is_port_in_use(args.port):
         existing_pid = pid_listening_on_port(args.port)
-        health = (browserplug_health(mcp_port_to_check, timeout=2.0) or {"_error": "unreachable"}
+        health = (browserplug_health(mcp_port_to_check, timeout=2.0, identity=True)
+                  or {"_error": "unreachable"}
                   if http_enabled else {"_error": "no HTTP MCP port"})
         logger.error(
             "Acquired the single-instance lock but port %s (WebSocket / Firefox extension) is "

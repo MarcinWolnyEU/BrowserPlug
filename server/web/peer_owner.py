@@ -15,6 +15,13 @@ The cost is that an attacker whose process is unreadable to us is not stopped by
 check alone; the Host/Origin guard and the endpoint token checks still apply. The first
 unresolved peer is logged at DEBUG, later ones stay silent.
 
+On macOS a non-root server reads only its own user's sockets (socket_table), so the lookup
+can never name another account's process. `socket_table.sees_other_users()` is False there
+and every peer gets the fail-open verdict without a table walk. Without that, each new
+loopback connection (an ephemeral port per POST /mcp and per /health poll, so the port cache
+below never hits) would walk every process of the user for an answer that cannot be "foreign".
+Refusing a peer whose owner cannot be seen is a separate decision (.tmp/dev-docs/LOOSE_ENDS.md).
+
 The lookup walks the OS connection table and can take tens of milliseconds, so the async
 entry point runs it in a thread and caches the verdict per peer port for a few seconds.
 A keep-alive client reuses one port, so the table is read once per connection burst.
@@ -32,6 +39,7 @@ import asyncio
 import logging
 import time
 
+from browserplug_shared import socket_table
 from server.reporting import client_identity
 
 logger = logging.getLogger(__name__)
@@ -94,8 +102,10 @@ def resolve_peer(port):
     if not isinstance(port, int) or not port:
         return False, None
     mine = server_owner()
+    if mine is None or not socket_table.sees_other_users():
+        return False, None
     pid = client_identity.pid_for_local_port(port)
-    if mine is None or not pid:
+    if not pid:
         return False, None
     try:
         import psutil
@@ -122,6 +132,8 @@ class PeerOwnerGate:
         self._logged_unresolved = False
 
     async def is_foreign(self, port):
+        if not socket_table.sees_other_users():
+            return False
         now = self._clock()
         hit = self._cache.get(port)
         if hit and hit[1] > now and (hit[2] is None or same_process(hit[2])):

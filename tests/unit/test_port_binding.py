@@ -50,6 +50,18 @@ def _listener(port, reuse_address=False, host="127.0.0.1"):
     return sock
 
 
+def _band_listener(port, host="localhost"):
+    """A listener on a band port, bound the way uvicorn binds: SO_REUSEADDR off Windows.
+
+    The band ports are reused across tests, and the stub servers and the seek leave
+    TIME_WAIT sockets behind. A bind without the option fails on those on BSD
+    (EADDRINUSE on macOS), while the probe under test, like the real server, binds with
+    it. A plain listener here would fail on a leftover instead of exercising the search.
+    Windows must stay plain: SO_REUSEADDR there lets a bind steal a live port.
+    """
+    return _listener(port, reuse_address=not IS_WINDOWS, host=host)
+
+
 # Where the stub servers live. It must NOT overlap the live 2830..2942 range: a stub that
 # answers /health with the real service marker inside that range can be adopted by a live
 # launcher that is seeking while the real server restarts. The seek functions take
@@ -313,7 +325,7 @@ def test_search_walks_past_four_real_listeners_and_takes_the_fifth_port():
     socks = []
     try:
         for i in range(4):
-            socks.append(_listener(base + i, host="localhost"))
+            socks.append(_band_listener(base + i))
         assert find_mcp_port(start_port=base, last_port=base + 4) == base + 4
     finally:
         for s in socks:
@@ -405,7 +417,7 @@ def test_server_walks_up_when_the_requested_in_range_port_is_taken():
     server to the NEXT port in the sequence, not make it fail or jump somewhere
     unpredictable — the client rediscovers it by walking the same order."""
     base = _free_band(2)
-    sock = _listener(base, host="localhost")
+    sock = _band_listener(base)
     try:
         server = BrowserPlugServer(port=_free_port(), mcp_port=base, start_mcp=False)
         assert server.mcp_port == base + 1
@@ -615,7 +627,7 @@ def test_pinned_busy_port_fails_clearly_instead_of_relocating(monkeypatch):
     """A pin means nobody searches: a busy pinned port is an error, never port+1."""
     from server.runtime import lifecycle
     base = _free_band(2)
-    sock = _listener(base, host="localhost")
+    sock = _band_listener(base)
     try:
         with pytest.raises(RuntimeError, match=str(base)):
             lifecycle.choose_mcp_port(base, "localhost", pinned=True)
@@ -631,7 +643,7 @@ def test_pinned_free_port_is_taken_as_is():
 
 def test_server_with_a_busy_pinned_port_refuses_to_construct():
     base = _free_band(2)
-    sock = _listener(base, host="localhost")
+    sock = _band_listener(base)
     try:
         with pytest.raises(RuntimeError, match=str(base)):
             BrowserPlugServer(port=_free_port(), mcp_port=base, start_mcp=False,

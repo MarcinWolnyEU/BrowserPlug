@@ -81,9 +81,12 @@ class TestEvalWorlds:
         tab_id = await self._open_settled(mcp, fixtures_server + FIXTURE)
         try:
             out = await self._eval(mcp, tab_id, self.EXPANDO_EXPR, world="isolated")
-            # The framework data is NOT returned from the isolated world...
-            assert "42" not in out, f"isolated world unexpectedly saw the expando:\n{out}"
-            assert "fixture" not in out, f"isolated world unexpectedly saw the expando:\n{out}"
+            # The framework data is NOT returned from the isolated world...  The reply
+            # names the page URL, whose random port can contain "42", so look at the
+            # reply without it.
+            data = out.replace(fixtures_server, "")
+            assert "42" not in data, f"isolated world unexpectedly saw the expando:\n{out}"
+            assert "fixture" not in data, f"isolated world unexpectedly saw the expando:\n{out}"
             # ...and the outcome is DISTINGUISHABLE from absence: a blind-spot note.
             assert "INVISIBLE FROM THE ISOLATED WORLD" in out, (
                 f"expected the isolated-world blind-spot note:\n{out}")
@@ -97,8 +100,9 @@ class TestEvalWorlds:
         tab_id = await self._open_settled(mcp, fixtures_server + FIXTURE)
         try:
             out = await self._eval(mcp, tab_id, self.EXPANDO_EXPR, world="main")
-            assert "42" in out, f"main world did not see the expando value:\n{out}"
-            assert "fixture" in out, f"main world did not see the expando framework:\n{out}"
+            data = out.replace(fixtures_server, "")   # the URL's random port may hold "42"
+            assert "42" in data, f"main world did not see the expando value:\n{out}"
+            assert "fixture" in data, f"main world did not see the expando framework:\n{out}"
             # The blind-spot note is a world=isolated concern; it must not appear here.
             assert "INVISIBLE FROM THE ISOLATED WORLD" not in out, (
                 f"blind-spot note wrongly fired in the main world:\n{out}")

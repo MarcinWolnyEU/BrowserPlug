@@ -23,7 +23,9 @@ login task ([install.md](install.md#starting-the-server-at-login)). It prints on
 `restart` and `shutdown` sign their request with the token in the state directory; the server
 refuses unsigned ones, so a bare `curl -X POST …/restart` gets 403. `shutdown` returns once
 the server has exited, and fails if it still answers after 10 seconds. A restart picks up code
-changes and keeps the port, and browsers reconnect within seconds. If the replacement fails to
+changes and keeps the port, and browsers reconnect within seconds. A `shutdown` sent while a
+restart is under way waits for the restart to finish (up to a minute) and then stops the
+replacement; if the restart is still running after that, it fails and says so. If the replacement fails to
 start, the old server keeps running and `status` prints why (`last_restart`).
 
 Exit codes: 0 done; 1 the server refused, answered badly or did not start; 2 no server or
@@ -45,7 +47,8 @@ packages (for a venv, the `pip install` line in [install.md](install.md#a-venv);
 client.
 
 On Windows the environment's `python.exe` is a stub, and the Python it starts owns the ports
-(`/health` reports it as `server_pid`). Stop both with `control.py shutdown`.
+(`/health` reports it as `server_pid`). Stop both with `control.py shutdown`. On macOS the
+server is a single process.
 
 ## Ports
 
@@ -67,6 +70,12 @@ A launcher adopts a server only when the process named in `/health` is this chec
 runs as your user and owns the socket that answered. Anything else in the range is skipped
 (the launcher's log says "ignoring a BrowserPlug-looking /health") and the launcher starts its
 own. Behind Windows Firewall a down server looks like timeouts, not refusals.
+
+macOS lets a second process bind a port that another process holds on an overlapping address
+(`127.0.0.1` while the other one listens on `0.0.0.0`, or the reverse). So on macOS the server
+checks for such a listener on 8772 before it starts, and if it finds one it refuses to start,
+with an error that says another process already listens there. Stop that process and start the
+server again. The search for the MCP port skips a port held that way, as it skips any taken port.
 
 ## Configuration
 
@@ -127,6 +136,7 @@ own, and while another server runs it exits at once.
 
 The state directory is `%LOCALAPPDATA%\browserplug\` on Windows and
 `$XDG_STATE_HOME/browserplug/` (`~/.local/state/browserplug/` when unset) on Linux and macOS.
+macOS does not use `~/Library` for it.
 
 - `config.json`: what the Options page changes on the server (the WebSocket bind and its LAN
   or WAN mode, the default browser and its startup arguments), plus `mcp.era` if you set it.

@@ -1869,7 +1869,15 @@ function markNavCommitted(d) {
   noteNavEvent(d, 'commit');
   wakeSettle(d.tabId);
 }
-browser.webNavigation.onCommitted.addListener(markNavCommitted);
+// onCommitted alone is a cross-document commit: a new document replaced the old one.
+// pushState and hash changes (the two listeners below) keep the document, so they stay out
+// of lastDocCommitted. The act step deadline reads it to tell "the page was replaced under
+// the step" from "the page changed its URL".
+browser.webNavigation.onCommitted.addListener(function (d) {
+  markNavCommitted(d);
+  const nav = TAB_NAV.get(d.tabId);
+  if (d.frameId === 0 && nav) nav.lastDocCommitted = d.timeStamp || Date.now();
+});
 browser.webNavigation.onHistoryStateUpdated.addListener(markNavCommitted);
 browser.webNavigation.onReferenceFragmentUpdated.addListener(markNavCommitted);
 
@@ -3507,6 +3515,17 @@ function androidFileUrlRefusal(url, verb) {
     'and do not look for a workaround here: local files need a desktop browser.';
 }
 
+// The keystroke that opens a local file. macOS spells it Cmd+O; every other desktop OS
+// keeps Ctrl+O. Best-effort like the rest of this block: a failed probe falls back to
+// Ctrl+O rather than costing the caller the refusal text.
+async function openFileShortcut() {
+  try {
+    const info = await browser.runtime.getPlatformInfo();
+    if (info && info.os === 'mac') return 'Cmd+O';
+  } catch (e) { /* unknown OS reads as the Windows/Linux shortcut */ }
+  return 'Ctrl+O';
+}
+
 async function fileUrlRefusal(url, verb, rawMessage) {
   const wanted = String(url || '').split(/[?#]/)[0];
   if (!/^file:/i.test(wanted)) return null;
@@ -3516,6 +3535,7 @@ async function fileUrlRefusal(url, verb, rawMessage) {
     landed = (all || []).find(t => t.url && t.url.split(/[?#]/)[0] === wanted) || null;
   } catch (e) { /* best-effort */ }
 
+  const shortcut = await openFileShortcut();
   let msg = 'the browser refused to ' + verb + ' ' + wanted + ': it rejected the URL itself ("' +
     String(rawMessage || 'Illegal URL') + '"). ';
   if (landed) {
@@ -3526,7 +3546,7 @@ async function fileUrlRefusal(url, verb, rawMessage) {
   } else {
     msg += 'NO tab was created and nothing was navigated; the tab you targeted is exactly ' +
       'where it was. Opening a local file is a browser platform rule, NOT a BrowserPlug setting ' +
-      'and not the file-access permission: the user has to open it by hand (Ctrl+O, or drag ' +
+      'and not the file-access permission: the user has to open it by hand (' + shortcut + ', or drag ' +
       'the file into the window). ';
   }
 
@@ -4510,9 +4530,67 @@ async function actTimeoutReport(tabId, t0, budgetMs, ctx) {
       verdict += ' The DOM did not grow or shrink either (0 element nodes).';
     }
   }
-  out.error = 'the ' + kind + ' step did not report back within ' +
-    (Math.round(budgetMs / 100) / 10) + 's. ' + verdict;
+  if (ctx && ctx.reportLost && out.tabClosed) {
+    // The step answered, so it did not time out; the tab then closed under the report.
+    // The closed tab is the whole story: no "replaced" text and no timeout flags (the
+    // server would print TIMED OUT for a step that did not time out).
+    delete out.timedOut;
+    delete out.actionTimedOut;
+    out.error = 'the ' + kind + ' step did not finish: ' + verdict;
+  } else if (ctx && ctx.reportLost) {
+    out.reportLost = true;
+    out.error = 'the ' + kind + ' step answered with nothing: the page it ran in was ' +
+      'replaced before it could report. ' + verdict;
+  } else {
+    out.error = 'the ' + kind + ' step did not report back within ' +
+      (Math.round(budgetMs / 100) / 10) + 's. ' + verdict;
+  }
   return out;
+}
+
+// Chrome 159 resolves the injection of a click that navigates with [{result: null}],
+// about 2 s after the commit; Chrome 157 leaves it pending (the deadline path above).
+// The toolkit always answers with an object, so null or undefined, or the "no result
+// from injected automation" stand-in for an empty array, is no answer at all.
+// Only a CROSS-DOCUMENT commit (lastDocCommitted) lets such an answer stand for "the page
+// was replaced": a pushState or hash change keeps the document, so the toolkit was never
+// torn down and the empty answer is a plain failure.
+// One cross-document commit must still not count: a document swapped BETWEEN chromium's two
+// injections (toolkit, then invoke). The invoke then runs in a fresh world without the
+// toolkit, throws, and Chrome reports it as the same null. The InjectionResult's documentId
+// cannot tell the cases apart (Canary 159 reports the NEW document's id on the null of a
+// navigating click too), so runAutomation stamps nav.invokeSentAt at dispatch and a commit
+// that predates it means the step never ran. Gecko stamps nothing, so only the commit rule
+// applies there.
+const ACT_LOST_NAV_GRACE_MS = 600;   // commit event may trail the resolution
+function actInjectionEmpty(outcome) {
+  if (outcome === null || outcome === undefined) return true;
+  return outcome.ok === false && outcome.error === 'no result from injected automation';
+}
+
+// Did a top-frame cross-document commit land for this tab since `since`? Polls briefly,
+// never longer than `graceMs` (what is left of the step's budget): the empty resolution
+// can beat the webNavigation event to the background.
+async function actNavCommittedSince(tabId, since, graceMs) {
+  const grace = (typeof graceMs === 'number') ? Math.min(ACT_LOST_NAV_GRACE_MS, graceMs)
+    : ACT_LOST_NAV_GRACE_MS;
+  const deadline = Date.now() + Math.max(0, grace);
+  for (;;) {
+    const nav = TAB_NAV.get(tabId) || {};
+    if (nav.lastDocCommitted && nav.lastDocCommitted > since - 100) return true;
+    const left = deadline - Date.now();
+    if (left <= 0) return false;
+    await new Promise(function (r) { setTimeout(r, Math.min(50, left)); });
+  }
+}
+
+// True when the latest cross-document commit landed no later than the moment the step's
+// invoke was dispatched: the document was already replaced, so nothing ran in the page the
+// step targeted. A stamp from an earlier step (before `since`) says nothing about this one.
+function actSwappedBeforeInvoke(tabId, since) {
+  const nav = TAB_NAV.get(tabId) || {};
+  return typeof nav.invokeSentAt === 'number' && nav.invokeSentAt >= since &&
+    typeof nav.lastDocCommitted === 'number' && nav.lastDocCommitted <= nav.invokeSentAt;
 }
 
 // Race one step against its budget. The step's own promise is NOT cancellable
@@ -4520,6 +4598,7 @@ async function actTimeoutReport(tabId, t0, budgetMs, ctx) {
 // with its rejection swallowed; a late failure belongs to a call nobody is
 // waiting for any more.
 async function runActStepWithDeadline(tabId, run, budgetMs, t0, ctx) {
+  const started = Date.now();
   let timer = null;
   const guard = new Promise(function (resolve) {
     timer = setTimeout(function () { resolve(ACT_TIMED_OUT); }, Math.max(500, budgetMs));
@@ -4532,7 +4611,26 @@ async function runActStepWithDeadline(tabId, run, budgetMs, t0, ctx) {
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
-  if (outcome !== ACT_TIMED_OUT) return outcome;
+  if (outcome !== ACT_TIMED_OUT) {
+    if (!actInjectionEmpty(outcome)) return outcome;
+    // Answered with nothing. A top-frame cross-document commit since the step began means
+    // the page was replaced under it: report it as the deadline path does. Without one the
+    // empty answer stays what it was, a failure. The grace poll stays inside the step's
+    // budget, so it can never be what overruns it.
+    const left = started + Math.max(500, budgetMs) - Date.now();
+    if (!(await actNavCommittedSince(tabId, started, left))) return outcome;
+    if (actSwappedBeforeInvoke(tabId, started)) {
+      return {
+        ok: false,
+        error: 'the page was replaced before the ' + ((ctx && ctx.kind) || 'step') +
+          ' step could run (a navigation committed between the toolkit injection and the ' +
+          'call), so nothing was done in it. Read the new page and re-issue the step if it ' +
+          'is still wanted.'
+      };
+    }
+    return await actTimeoutReport(tabId, started, budgetMs,
+                                  Object.assign({}, ctx, { reportLost: true }));
+  }
   return await actTimeoutReport(tabId, t0, budgetMs, ctx);
 }
 

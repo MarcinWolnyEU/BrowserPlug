@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -136,7 +137,7 @@ def test_launcher_starts_each_spawn_with_a_fresh_capture_file(tmp_path):
     new.close()
 
     assert os.path.abspath(new.name) != os.path.abspath(str(startup))
-    assert open(new.name, encoding="utf-8").read() == ""
+    assert Path(new.name).read_text(encoding="utf-8") == ""
     assert "previous server" in startup.read_text(encoding="utf-8")
 
 

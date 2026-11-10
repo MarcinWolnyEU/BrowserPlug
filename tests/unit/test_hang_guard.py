@@ -90,9 +90,23 @@ HOSTILE_CLIENT = textwrap.dedent('''
 ''')
 
 
+def wait_for_websocket_port(box, timeout=20.0):
+    """The MCP port answers a moment before the WebSocket port is listening (the server logs
+    them 25 ms apart on a Mac), so a probe of the second one right after the first needs
+    this."""
+    def reachable():
+        try:
+            get_json(f"http://127.0.0.1:{box.ws_port}/reachable", 1.0)
+            return True
+        except OSError:
+            return False
+    assert wait_until(reachable, timeout, step=0.05), "the WebSocket port never listened"
+
+
 def test_a_client_with_a_hostile_command_line_does_not_stall_either_loop(sandbox):
     sandbox.start()
     sandbox.wait_healthy()
+    wait_for_websocket_port(sandbox)
     client = subprocess.Popen(
         [sys.executable, "-c", HOSTILE_CLIENT, str(sandbox.mcp_port), *["key" * 1300] * 6],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

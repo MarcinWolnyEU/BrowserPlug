@@ -610,7 +610,12 @@ def test_the_supervisor_thread_restarts_then_exits_for_a_loop_that_stays_blocked
 
 
 def test_a_busy_but_not_blocked_loop_is_left_alone():
-    """Many short callbacks keep a loop busy; it still beats between them."""
+    """Many short callbacks keep a loop busy; it still beats between them.
+
+    The next callback is queued only after the previous one finished. Queueing one every
+    60 ms regardless made the loop's queue grow whenever time.sleep(0.05) ran long (macOS
+    sleeps 5-10 ms over, so the loop was saturated, not busy) and the heartbeat, which
+    waits behind everything already queued, went stale."""
     cfg = Config(heartbeat=0.02, tick=0.05, stale=0.3, bad_ticks=2, grace=0.2,
                  dead_man=60.0, gap_forgive=5.0)
     loop = LoopThread()
@@ -622,10 +627,17 @@ def test_a_busy_but_not_blocked_loop_is_left_alone():
                                 arm_dead_man=lambda s: None, dump_stacks=lambda: None)
         dog.attach_loop("ws", loop.loop)
         dog.start()
+        finished = threading.Event()
+
+        def busy():
+            time.sleep(0.05)
+            finished.set()
         deadline = time.monotonic() + 1.5
         while time.monotonic() < deadline:
-            loop.loop.call_soon_threadsafe(time.sleep, 0.05)
-            time.sleep(0.06)
+            finished.clear()
+            loop.loop.call_soon_threadsafe(busy)
+            assert finished.wait(2.0)
+            time.sleep(0.01)
         assert events == []
     finally:
         dog.stop()
@@ -744,6 +756,40 @@ def test_the_platform_suspend_clock_is_a_non_negative_number_or_unknown():
     time.sleep(0.05)
     second = watchdog.suspended_seconds()
     assert 0 <= first <= second + 0.01
+
+
+def test_macos_reads_the_suspend_time_from_the_two_unadjusted_mach_clocks(monkeypatch):
+    """CLOCK_MONOTONIC is frequency-adjusted and can drift the difference below zero; the
+    RAW pair (continuous minus absolute time) is exact."""
+    clocks = {"cont": 1000.0, "up": 400.0, "adjusted": 999.0}
+    monkeypatch.setattr(watchdog.sys, "platform", "darwin")
+    monkeypatch.setattr(watchdog.time, "CLOCK_MONOTONIC_RAW", "cont", raising=False)
+    monkeypatch.setattr(watchdog.time, "CLOCK_UPTIME_RAW", "up", raising=False)
+    monkeypatch.setattr(watchdog.time, "CLOCK_MONOTONIC", "adjusted", raising=False)
+    monkeypatch.setattr(watchdog.time, "clock_gettime", lambda clock: clocks[clock],
+                        raising=False)
+    assert watchdog.suspended_seconds() == 600.0
+
+
+def test_macos_reads_the_awake_clock_first_and_never_reports_negative_suspend(monkeypatch):
+    """On a host that never slept the two clocks differ only by the gap between the reads.
+    Reading CLOCK_UPTIME_RAW first makes that gap add to the result; a pair that still
+    crosses is clamped at 0."""
+    reads = []
+    values = {"cont": 500.0, "up": 500.0}
+    monkeypatch.setattr(watchdog.sys, "platform", "darwin")
+    monkeypatch.setattr(watchdog.time, "CLOCK_MONOTONIC_RAW", "cont", raising=False)
+    monkeypatch.setattr(watchdog.time, "CLOCK_UPTIME_RAW", "up", raising=False)
+
+    def clock_gettime(clock):
+        reads.append(clock)
+        return values[clock]
+
+    monkeypatch.setattr(watchdog.time, "clock_gettime", clock_gettime, raising=False)
+    assert watchdog.suspended_seconds() == 0.0
+    assert reads == ["up", "cont"]
+    values["cont"] = 499.999                   # a pair that crossed by a millisecond
+    assert watchdog.suspended_seconds() == 0.0
 
 
 # --- a confirmed freeze ends with the lock released, a successor started, the process gone ---

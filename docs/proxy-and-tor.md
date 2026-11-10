@@ -77,7 +77,11 @@ is downloaded or started.
   ([server.md](server.md#getting-a-variable-to-the-server)).
 
 Bundles exist for Windows and Linux on x86_64 and i686 and for macOS on x86_64 and arm64.
-I have tested only Windows x86_64 and Linux x86_64 (glibc, Debian).
+I have tested Windows x86_64, Linux x86_64 (glibc, Debian) and macOS arm64 (macOS 27 on an
+Apple M2); the macOS x86_64 bundle has not been run. On macOS the first call signs the
+downloaded `tor` with an ad-hoc signature, which Apple Silicon requires, and a first start
+took close to 3 minutes once, so a slow Tor network can hit the 3-minute limit; try again.
+A download that arrives truncated is retried up to 3 times before the call fails.
 
 To test, navigate to https://check.torproject.org/ with a proxy you run, such as
 `socks5://127.0.0.1:9050`: the title reads "Congratulations. This browser is configured to

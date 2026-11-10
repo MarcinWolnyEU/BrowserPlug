@@ -11,23 +11,35 @@ read natively rather than through psutil:
   the offsets psutil reads (the 32-bit PEB of a WOW64 process); a 32-bit reader gets none.
 - Linux: the real uid on the `Uid:` line of /proc/<pid>/status, /proc/<pid>/cmdline split on
   NUL, and the /proc/<pid>/cwd link.
-- Anywhere else (macOS, the BSDs): psutil when it can be imported (`psutil_holder` also tells
-  server_env whether a process runs from the server environment), else ProbeUnavailable, which
-  server_pid_is_ours turns into "trust /health and warn once".
+- macOS: ctypes over libproc and sysctl (darwin_procs.py), for processes of the same user.
+  The facts come from PROC_PIDTBSDINFO (owner), KERN_PROCARGS2 (argv) and
+  PROC_PIDVNODEPATHINFO (cwd). If that module cannot load or fails its self-check, the
+  psutil path below takes over.
+- Anywhere else (the BSDs), and macOS without the native reader: psutil when it can be
+  imported, else ProbeUnavailable, which server_pid_is_ours turns into "trust /health and
+  warn once". `psutil_holder` tells server_env whether a process runs from the server
+  environment: psutil when it imports, else the native reader on macOS.
 
 `pid_owns_listener(pid, port)` ties a pid to the socket that answers on a port: the TCP table
 with owning pids (GetExtendedTcpTable) on Windows, /proc/net/tcp plus the pid's socket inodes
-on Linux. `pid_alive(pid)` says whether a process is still running (a zombie, or an exited
+on Linux, the sockets of every process of this user (PROC_PIDFDSOCKETINFO) on macOS.
+`pid_alive(pid)` says whether a process is still running (a zombie, or an exited
 process whose handle someone holds, is not). `pids_running_image(path)` lists the processes
 whose image is a file, from the process list, without opening the file (Windows only).
 
 `facts(pid)` returns (same_user, argv, cwd). OSError means the process could not be read
 (gone, protected, not a pid), which the caller counts as foreign. A process of another user
-comes back as (False, [], None) without its argv being read. An unreadable cwd alone is None,
-not an error: only the relative and `-m` launch forms need it.
+comes back as (False, [], None) without its argv being read; macOS refuses to describe it at
+all, so there it is a PermissionError (an OSError), which the caller counts as foreign too.
+launcher/client_pid.py reads nothing more about such a pid, `ps` included: its walk of the
+client chain stops there. An unreadable cwd alone is None, not an error: only the relative and
+`-m` launch forms need it.
 
 WindowsProbe also answers the image path, creation time and parent pid that
 launcher/client_pid.py walks the client chain with, so the launcher has one ctypes surface.
+`parent_and_start(pid)` gives the same two facts on macOS (the parent pid and the start time
+in epoch seconds, both from PROC_PIDTBSDINFO) so that walk needs no `ps` there; the other
+platforms read them elsewhere and it raises ProbeUnavailable for them.
 tests/unit/test_proc_facts.py compares every reading with psutil on live processes, which is
 what catches a PEB offset that a future Windows moves.
 
@@ -391,6 +403,26 @@ def _windows():
     return _windows_probe
 
 
+# ---- macOS -------------------------------------------------------------------------------
+
+_DARWIN_PROBE_CACHE = None
+
+
+def darwin_probe():
+    """The shared DarwinProbe, or None where there is none: not macOS, libproc not loadable,
+    or the probe's layouts failed its self-check. Decided once per process."""
+    global _DARWIN_PROBE_CACHE
+    if sys.platform != "darwin":
+        return None
+    if _DARWIN_PROBE_CACHE is None:
+        try:
+            from browserplug_shared import darwin_procs
+            _DARWIN_PROBE_CACHE = darwin_procs.DarwinProbe()
+        except Exception:
+            _DARWIN_PROBE_CACHE = False
+    return _DARWIN_PROBE_CACHE or None
+
+
 # ---- Linux -------------------------------------------------------------------------------
 
 def parse_status_uid(text):
@@ -517,6 +549,9 @@ def pid_owns_listener(pid, port):
         return owners == {pid}
     if sys.platform.startswith("linux") and os.path.isdir("/proc/net"):
         return linux_owns_listener(pid, port)
+    probe = darwin_probe()
+    if probe is not None:
+        return reached_owners(probe.listeners(port, claimed=pid)) == {pid}
     raise ProbeUnavailable(f"no native socket-owner probe on {sys.platform}")
 
 
@@ -526,6 +561,12 @@ def pid_alive(pid):
         return False
     if _IS_WINDOWS:
         return _windows().alive(pid)
+    probe = darwin_probe()
+    if probe is not None:
+        try:
+            return probe.alive(pid)
+        except OSError:
+            pass                # fall through to the kill(0) answer below
     try:
         with open(f"/proc/{pid}/stat", "rb") as fh:
             # "pid (comm) S ...": comm may hold spaces and parentheses, so cut at the last ")".
@@ -543,6 +584,18 @@ def pid_alive(pid):
     except OSError:
         return True         # PermissionError: it exists, and is not ours
     return True
+
+
+def parent_and_start(pid):
+    """(parent pid, start time in seconds since the epoch) of `pid`, read natively on macOS.
+    OSError when the process cannot be read; ProbeUnavailable where there is no native
+    reader of these two (Windows and Linux have theirs in launcher/client_pid.py)."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        raise OSError(f"not a pid: {pid!r}")
+    probe = darwin_probe()
+    if probe is not None:
+        return probe.parent_and_start(pid)
+    raise ProbeUnavailable(f"no native parent-and-start reader on {sys.platform}")
 
 
 def pids_running_image(path):
@@ -576,23 +629,40 @@ def _psutil_facts(pid):
 
 
 def psutil_holder(env_dir):
-    """A pid whose executable or argv[0] lies under `env_dir`, by psutil; None when there is
-    none or psutil is not importable (a bare interpreter on macOS or a BSD)."""
+    """A pid whose executable or argv[0] lies under `env_dir`; None when there is none.
+
+    psutil answers when it can be imported. Without it macOS uses the native reader, and
+    the other platforms know nobody (this is the macOS and BSD half of server_env.env_in_use;
+    Windows and Linux have their own). argv[0] is compared as written, with only its
+    directory resolved: a venv's bin/python is a symlink to a managed interpreter, and
+    resolving it too (as the executable path always is) leaves the environment, so the
+    process that runs from it would never be found."""
     try:
         import psutil
     except ImportError:
-        return None
+        probe = darwin_probe()
+        if probe is None:
+            return None
+        try:
+            return probe.holder(env_dir)
+        except OSError:
+            return None
 
     def norm(path):
         return os.path.normcase(os.path.realpath(path))
+
+    def norm_written(path):
+        head, tail = os.path.split(os.path.abspath(path))
+        return os.path.normcase(os.path.join(os.path.realpath(head), tail))
     prefix = norm(env_dir).rstrip(os.sep) + os.sep
     for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
         try:
             info = proc.info
             argv0 = (info.get("cmdline") or [""])[0]
-            for path in (info.get("exe") or "", argv0):
-                if path and norm(path).startswith(prefix):
-                    return info["pid"]
+            if info.get("exe") and norm(info["exe"]).startswith(prefix):
+                return info["pid"]
+            if argv0 and os.path.isabs(argv0) and norm_written(argv0).startswith(prefix):
+                return info["pid"]
         except (psutil.Error, OSError):
             continue
     return None
@@ -607,4 +677,7 @@ def facts(pid):
         return _windows().facts(pid)
     if sys.platform.startswith("linux") and os.path.isdir("/proc/self"):
         return linux_facts(pid)
+    probe = darwin_probe()
+    if probe is not None:
+        return probe.facts(pid)
     return _psutil_facts(pid)
