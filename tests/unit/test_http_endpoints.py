@@ -23,6 +23,7 @@ from server.web import host_guard, http_endpoints
 from server import preflight
 from server.web.http_endpoints import CONTROL, LOCAL, LOOPBACK, TOKEN, ROUTES, find_route
 from server.server import BrowserPlugServer
+from wait_helper import assert_never_within_async, wait_until_async
 
 TOKEN_VALUE = "a" * 43
 LOCAL_PEER = ("127.0.0.1", 5555)
@@ -352,15 +353,31 @@ def _own_identity_pool(monkeypatch):
 
 class SlowIdentity:
     """resolve_client_chain / describe_pid stand-ins that take `seconds` and record the
-    thread they ran on."""
+    thread they ran on. The TCP-table read is instant; the process walk after it is the
+    slow part.
 
-    def __init__(self, seconds):
+    With `hold=True` the walk does not take a time at all: it stays shut until the test sets
+    `release` (or leaves the `with` block), so "the lookup is still running" is a fact of the
+    test and not a race against a sleep on a loaded machine. HOLD_CAP frees a walk nobody
+    opens, so a failed test ends instead of hanging; an assertion on how long a request was
+    held is bounded well below it."""
+
+    HOLD_CAP = 10.0
+
+    def __init__(self, seconds=0.0, hold=False):
         self.seconds = seconds
+        self.hold = hold
+        self.release = threading.Event()
         self.threads = []
 
-    def chain(self, port):
+    def chain(self, port, on_peer_read=None):
         self.threads.append(threading.current_thread())
-        time.sleep(self.seconds)
+        if on_peer_read is not None:
+            on_peer_read()
+        if self.hold:
+            self.release.wait(self.HOLD_CAP)
+        else:
+            time.sleep(self.seconds)
         return 4321, None
 
     def describe(self, pid):
@@ -375,6 +392,7 @@ class SlowIdentity:
         return self
 
     def __exit__(self, *exc):
+        self.release.set()
         for p in self._patches:
             p.stop()
 
@@ -411,34 +429,46 @@ def _echo_app(arrived):
 
 
 @pytest.mark.asyncio
-async def test_the_identity_lookup_runs_on_a_worker_thread_and_fills_the_row_when_done():
+async def test_the_identity_lookup_runs_on_a_worker_thread_and_fills_the_row_when_done(
+        monkeypatch):
+    # The lookup is held shut. A request that waited for it would be held for the whole
+    # budget (4 s here) and one that ran it on the loop would stall for HOLD_CAP, so
+    # returning inside half the budget tells them from a request that is answered at once,
+    # which takes milliseconds even on a loaded runner.
+    monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 4.0)
     server = _server()
     arrived = []
     app = server._wrap_client_tracking(_echo_app(arrived))
-    with SlowIdentity(0.3) as slow:
+    with SlowIdentity(hold=True) as slow:
         scope, receive, send, sent = _mcp_post("s1")
         (_, elapsed) = await _timed(app(scope, receive, send))
-        assert elapsed < 0.25, "the request waited for the lookup"
+        assert elapsed < http_endpoints.IDENTITY_WAIT_SECONDS / 2, (
+            "the request waited for the lookup")
         assert server.http_clients["s1"]["identified"] is False
         assert server.http_clients["s1"]["friendly"] is None
-        for _ in range(100):
-            await asyncio.sleep(0.05)
-            if server.http_clients["s1"]["identified"]:
-                break
+        slow.release.set()
+        await wait_until_async(lambda: server.http_clients["s1"]["identified"],
+                               "the identity lookup for s1 landed")
     assert server.http_clients["s1"]["friendly"] == "Slow Client"
     assert server.http_clients["s1"]["pid"] == 4321
     assert slow.threads and slow.threads[0] is not threading.current_thread()
 
 
 @pytest.mark.asyncio
-async def test_a_slow_identity_lookup_delays_neither_health_nor_another_clients_request():
+async def test_a_slow_identity_lookup_delays_neither_health_nor_another_clients_request(
+        monkeypatch):
+    # Held shut, and judged against the wait budget as in the test above: a request or a
+    # /health that waited on the lookup would take a whole budget (4 s), one that ran it on
+    # the loop HOLD_CAP, and neither bound is within reach of scheduler noise.
+    monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 4.0)
     server = _server()
     arrived = []
     app = server._wrap_client_tracking(_echo_app(arrived))
-    with SlowIdentity(1.0):
+    with SlowIdentity(hold=True) as slow:
         scope, receive, send, _ = _mcp_post("hostile", peer=("127.0.0.1", 6001))
         first = asyncio.ensure_future(app(scope, receive, send))
-        await asyncio.sleep(0.05)       # the lookup is under way on its worker
+        await wait_until_async(lambda: slow.threads,
+                               "the lookup was under way on its worker")
 
         async def health():
             sent = []
@@ -459,55 +489,86 @@ async def test_a_slow_identity_lookup_delays_neither_health_nor_another_clients_
         _, other_seconds = await _timed(app(*other[:3]))
         await first
     assert status == 200
-    assert health_seconds < 0.4, f"/health waited {health_seconds:.2f}s behind a lookup"
-    assert other_seconds < 0.4, f"another client's request waited {other_seconds:.2f}s"
+    limit = http_endpoints.IDENTITY_WAIT_SECONDS / 2
+    assert health_seconds < limit, f"/health waited {health_seconds:.2f}s behind a lookup"
+    assert other_seconds < limit, f"another client's request waited {other_seconds:.2f}s"
 
 
 @pytest.mark.asyncio
 async def test_a_tools_call_waits_for_its_sessions_lookup_but_only_so_long(monkeypatch):
     """The call is filed under the client's real process when the lookup is quick; a slow
     one is not waited out."""
-    monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 0.3)
     call = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"server_info"}}'
+    # A quick lookup finishes inside a budget no machine can exhaust, so the call is
+    # recorded after it whatever the scheduler does.
+    monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 30.0)
     server = _server()
     app = server._wrap_client_tracking(_echo_app([]))
-    with SlowIdentity(0.15):
+    with SlowIdentity(0.05):
         quick = _mcp_post("quick", body=call, peer=("127.0.0.1", 6003))
         await app(*quick[:3])
     assert server.http_clients["quick"]["identified"] is True, (
         "a quick lookup must be finished before the call is recorded")
+    # A lookup held shut is not waited out: the call is let go when the budget ends. The
+    # budget is a timer, so it cannot end much before 0.3 s; a call that waited for the
+    # lookup instead would be held until HOLD_CAP.
+    monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 0.3)
     slow_server = _server()
     slow_app = slow_server._wrap_client_tracking(_echo_app([]))
-    with SlowIdentity(1.5):
+    with SlowIdentity(hold=True) as held:
         slow = _mcp_post("slow", body=call, peer=("127.0.0.1", 6004))
         _, seconds = await _timed(slow_app(*slow[:3]))
-    assert 0.25 < seconds < 0.9, f"waited {seconds:.2f}s"
-    assert slow_server.http_clients["slow"]["identified"] is False
+        assert slow_server.http_clients["slow"]["identified"] is False
+    assert 0.25 < seconds < held.HOLD_CAP / 2, f"waited {seconds:.2f}s"
 
 
 @pytest.mark.asyncio
 async def test_a_flood_of_new_connections_cannot_queue_unbounded_lookups(monkeypatch):
-    monkeypatch.setattr(http_endpoints, "MAX_IDENTITY_PENDING", 2)
+    """With the lookups held, the pending cap alone decides how many are asked for. The pool
+    is larger than the cap on purpose: with as many workers as the cap, at most that many
+    lookups could run whether or not the cap worked, and the test could not tell."""
+    from concurrent.futures import ThreadPoolExecutor
+    cap, sessions = 2, 8
+    monkeypatch.setattr(http_endpoints, "MAX_IDENTITY_PENDING", cap)
+    pool = ThreadPoolExecutor(max_workers=sessions)
+    monkeypatch.setattr(http_endpoints, "_identity_pool", pool)
     server = _server()
     app = server._wrap_client_tracking(_echo_app([]))
-    with SlowIdentity(0.4) as slow:
-        for i in range(8):
-            scope, receive, send, _ = _mcp_post(f"flood-{i}", peer=("127.0.0.1", 7000 + i))
-            await app(scope, receive, send)
-        assert len(server.http_clients) == 8, "every session still gets its row"
-        await asyncio.sleep(1.5)
-    assert len(slow.threads) <= 4, f"{len(slow.threads)} lookups ran for 8 sessions"
+    try:
+        with SlowIdentity(hold=True) as slow:
+            for i in range(sessions):
+                scope, receive, send, _ = _mcp_post(f"flood-{i}", peer=("127.0.0.1", 7000 + i))
+                await app(scope, receive, send)
+            assert len(server.http_clients) == sessions, "every session still gets its row"
+            # Held, so neither of the first lookups ends before the rest are asked for.
+            await wait_until_async(lambda: len(slow.threads) >= cap,
+                                   "the lookups under the cap ran on workers")
+            # A lookup past the cap is dropped, not queued: a worker is free for it here, so
+            # one would start within a moment if the cap let it through.
+            await assert_never_within_async(
+                lambda: len(slow.threads) > cap, "a lookup ran past the pending cap", within=0.3)
+            tried = [server.http_clients[f"flood-{i}"]["identity_tried"] for i in range(sessions)]
+            assert [t is not None for t in tried] == [True] * cap + [False] * (sessions - cap), (
+                "only the sessions under the cap were looked up; the rest may try again later")
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    assert len(slow.threads) == cap, f"{len(slow.threads)} lookups ran for {sessions} sessions"
 
 
 @pytest.mark.asyncio
 async def test_the_same_session_on_one_connection_is_looked_up_once():
     server = _server()
     app = server._wrap_client_tracking(_echo_app([]))
-    with SlowIdentity(0.2) as slow:
-        for _ in range(5):
+    with SlowIdentity(hold=True) as slow:
+        for _ in range(5):                  # while the lookup is running
             scope, receive, send, _ = _mcp_post("one")
             await app(scope, receive, send)
-        await asyncio.sleep(0.6)
+        slow.release.set()
+        await wait_until_async(lambda: server.http_clients["one"]["identified"],
+                               "the identity lookup for session one landed")
+        for _ in range(5):                  # and after it has landed
+            scope, receive, send, _ = _mcp_post("one")
+            await app(scope, receive, send)
     assert len(slow.threads) == 1
 
 
@@ -568,13 +629,20 @@ async def test_a_disconnect_after_the_body_was_read_still_reaches_the_app():
 
 # --- the Host check's interface lookup stays off the loop -----------------------------------
 
+# The lookup blocks for 2 s and the loop's worst gap between 10 ms ticks must stay under 1 s.
+# Work run on the loop would stall it for the whole 2 s, so a regression fails the bound by a
+# factor of two; scheduler noise on a loaded 3-vCPU VM runs to tens or a few hundred ms and
+# cannot reach it.
+BLOCKING_WORK_SECONDS = 2.0
+MAX_LOOP_GAP_SECONDS = 1.0
+
 @pytest.mark.asyncio
 async def test_the_host_guards_interface_lookup_runs_on_a_worker_not_the_loop():
     threads = []
 
     def addresses():
         threads.append(threading.current_thread())
-        time.sleep(0.4)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return {"192.168.9.9"}
 
     guard = host_guard.HostGuard(addresses=addresses)
@@ -598,7 +666,8 @@ async def test_the_host_guards_interface_lookup_runs_on_a_worker_not_the_loop():
     task.cancel()
     assert threads and threads[0] is not threading.current_thread()
     gaps = [b - a for a, b in zip(ticks, ticks[1:])]
-    assert max(gaps) < 0.2, f"the loop stalled {max(gaps):.2f}s on the address lookup"
+    assert max(gaps) < MAX_LOOP_GAP_SECONDS, (
+        f"the loop stalled {max(gaps):.2f}s on the address lookup")
     assert reached, "the request itself was admitted"
 
 
@@ -645,14 +714,10 @@ async def test_ws_bind_scans_the_interfaces_off_the_loop():
 CALL = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"server_info"}}'
 
 
-async def _land(server, sid, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if server.http_clients[sid]["identified"]:
-            await asyncio.sleep(0.05)       # the re-key is queued onto the loop
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("the identity lookup never landed")
+async def _land(server, sid):
+    """Wait until the session's lookup has filled its row."""
+    await wait_until_async(lambda: server.http_clients[sid]["identified"],
+                           "the identity lookup landed")
 
 
 @pytest.mark.asyncio
@@ -663,7 +728,7 @@ async def test_a_call_that_outran_a_slow_lookup_does_not_pin_the_client_to_its_s
     monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 0.15)
     server = _server()
     app = server._wrap_client_tracking(_echo_app([]))
-    with SlowIdentity(0.6):
+    with SlowIdentity(hold=True) as slow:
         scope, receive, send, _ = _mcp_post("slow", body=CALL, peer=("127.0.0.1", 6101))
         await app(scope, receive, send)
         entry = server.http_clients["slow"]
@@ -671,6 +736,7 @@ async def test_a_call_that_outran_a_slow_lookup_does_not_pin_the_client_to_its_s
         # what the tool layer does during that call:
         assert routing.client_key(None, "slow", server.http_clients) == "session:slow"
         assert "client_key" not in entry, "a placeholder key must not be stored as final"
+        slow.release.set()
         await _land(server, "slow")
     assert routing.client_key(None, "slow", server.http_clients) == "pid:4321"
     assert entry["client_key"] == "pid:4321"
@@ -682,13 +748,14 @@ async def test_a_quick_lookup_and_a_slow_one_end_in_the_same_key(monkeypatch):
     monkeypatch.setattr(routing, "process_started", lambda pid: None)
     monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 0.3)
     keys = {}
-    for name, seconds in (("quick", 0.05), ("slow", 0.8)):
+    for name, held in (("quick", False), ("slow", True)):
         server = _server()
         app = server._wrap_client_tracking(_echo_app([]))
-        with SlowIdentity(seconds):
+        with SlowIdentity(0.05, hold=held) as lookup:
             scope, receive, send, _ = _mcp_post(name, body=CALL, peer=("127.0.0.1", 6102))
             await app(scope, receive, send)
             routing.client_key(None, name, server.http_clients)     # the call's own lookup
+            lookup.release.set()
             await _land(server, name)
         keys[name] = routing.client_key(None, name, server.http_clients)
     assert keys["quick"] == keys["slow"] == "pid:4321"
@@ -702,12 +769,16 @@ async def test_a_browser_chosen_while_the_client_was_anonymous_follows_it_to_its
     monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 0.1)
     server = _server()
     app = server._wrap_client_tracking(_echo_app([]))
-    with SlowIdentity(0.5):
+    with SlowIdentity(hold=True) as slow:
         scope, receive, send, _ = _mcp_post("slow", body=CALL, peer=("127.0.0.1", 6103))
         await app(scope, receive, send)
         key = routing.client_key(None, "slow", server.http_clients)
         server.browser_selection[key] = "firefox-1"      # `browsers use`, mid-lookup
+        slow.release.set()
         await _land(server, "slow")
+        # The re-key is queued onto the loop after the lookup lands.
+        await wait_until_async(lambda: dict(server.browser_selection) == {"pid:4321": "firefox-1"},
+                               "the browser chosen while anonymous followed the client")
     assert dict(server.browser_selection) == {"pid:4321": "firefox-1"}
 
 
@@ -745,7 +816,8 @@ async def test_a_lookup_that_finds_no_process_leaves_the_session_key_final(monke
     monkeypatch.setattr(http_endpoints, "IDENTITY_WAIT_SECONDS", 0.05)
     server = _server()
     app = server._wrap_client_tracking(_echo_app([]))
-    with patch.object(client_identity, "resolve_client_chain", lambda port: (None, None)), \
+    with patch.object(client_identity, "resolve_client_chain",
+                      lambda port, on_peer_read=None: (None, None)), \
             patch.object(client_identity, "describe_pid", lambda pid: {"pid": None}):
         scope, receive, send, _ = _mcp_post("ghost", body=CALL, peer=("127.0.0.1", 6104))
         await app(scope, receive, send)

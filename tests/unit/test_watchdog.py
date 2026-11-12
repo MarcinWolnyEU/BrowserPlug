@@ -7,6 +7,7 @@ table is to show what ordinary slowness does NOT trigger.
 """
 
 import asyncio
+import dataclasses
 import http.server
 import logging
 import os
@@ -22,6 +23,7 @@ import test_imports  # noqa: F401
 from server.runtime import watchdog
 from browserplug_shared.mcp_port import HEALTH_SERVICE
 from server.runtime.watchdog import Action, Config, Observation, State, decide
+from wait_helper import wait_until
 
 CFG = Config()
 
@@ -515,8 +517,8 @@ def test_a_freeze_holding_the_logging_lock_does_not_stop_the_restart_or_the_exit
         # blocks inside the handler, as a frozen writer would make every logger block.
         threading.Thread(target=wd_logger.warning, args=("held",), daemon=True).start()
         assert blocked.entered.wait(5)
-        assert wait_for(lambda: "restart" in events and "exit" in events, timeout=8), (
-            f"the escalation stalled behind the blocked log handler: {events}")
+        wait_until(lambda: "restart" in events and "exit" in events,
+                   "the escalation got past the blocked log handler (restart, then exit)")
         assert events.index("dump") < events.index("restart") < events.index("exit")
     finally:
         blocked.gate.set()
@@ -555,15 +557,6 @@ class LoopThread:
         self.loop.close()
 
 
-def wait_for(predicate, timeout=10.0, step=0.02):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(step)
-    return False
-
-
 def test_a_heartbeat_on_a_real_loop_stays_fresh_until_the_loop_is_blocked():
     cfg = Config(heartbeat=0.02, tick=0.05, stale=0.3)
     loop = LoopThread()
@@ -571,13 +564,15 @@ def test_a_heartbeat_on_a_real_loop_stays_fresh_until_the_loop_is_blocked():
         dog = watchdog.Watchdog(cfg, hang_file=None, begin_restart=lambda t: None,
                                 exit_process=lambda: None)
         dog.attach_loop("ws", loop.loop)
-        assert wait_for(lambda: dog.age_of("ws") is not None)
+        wait_until(lambda: dog.age_of("ws") is not None, "the loop's first beat was seen")
+        # Polled, not sampled once: a runner that descheduled this thread for 200 ms between
+        # two beats would fail a single reading. A loop that stopped beating never recovers.
+        wait_until(lambda: dog.age_of("ws") < 0.2, "a free loop beats")
         time.sleep(0.3)
-        assert dog.age_of("ws") < 0.2, "a free loop keeps beating"
+        wait_until(lambda: dog.age_of("ws") < 0.2, "the loop kept beating")
         loop.block(1.0)
-        assert wait_for(lambda: dog.age_of("ws") > 0.5, timeout=3), (
-            "a blocked loop must stop beating")
-        assert wait_for(lambda: dog.age_of("ws") < 0.2, timeout=5), "and beat again once free"
+        wait_until(lambda: dog.age_of("ws") > 0.5, "a blocked loop stopped beating")
+        wait_until(lambda: dog.age_of("ws") < 0.2, "the loop beat again once free")
         assert dog.age_of("mcp") is None
     finally:
         loop.close()
@@ -597,11 +592,11 @@ def test_the_supervisor_thread_restarts_then_exits_for_a_loop_that_stays_blocked
             arm_dead_man=lambda s: None, dump_stacks=lambda: dumps.append(1))
         dog._write = lambda text: None
         dog.attach_loop("ws", loop.loop)
-        assert wait_for(lambda: dog.age_of("ws") is not None)
+        wait_until(lambda: dog.age_of("ws") is not None, "the loop's first beat was seen")
         dog.start()
         loop.block(3.0)
-        assert wait_for(lambda: ("restart", "watchdog") in events, timeout=5)
-        assert wait_for(lambda: ("exit",) in events, timeout=5)
+        wait_until(lambda: ("restart", "watchdog") in events, "the supervisor restarted")
+        wait_until(lambda: ("exit",) in events, "the supervisor forced the exit")
         assert events.index(("restart", "watchdog")) < events.index(("exit",))
         assert len(dumps) >= 2, "one dump with the restart and one before the forced exit"
     finally:
@@ -697,16 +692,74 @@ def test_the_default_probe_reaches_a_server_listening_on_ipv6_only(v6_health_ser
     assert watchdog.default_probe(port, 3, "127.0.0.1") is False, "refused: not on IPv4"
 
 
-def test_a_listener_that_accepts_and_never_answers_is_a_failed_probe_without_a_second_try():
-    server = socket.socket()
-    server.bind(("127.0.0.1", 0))
-    server.listen()
+def _loopback_pair_on_one_port(attempts=50):
+    """Two listening sockets on one port number: 127.0.0.1 and [::1].
+
+    "localhost" names both, and the probe tries them in turn. The two listeners are separate
+    sockets, so another process can take the number on IPv6 between the IPv4 bind and the
+    IPv6 one; on a collision the helper picks a new number. It sets no SO_REUSEADDR, which on
+    Windows would let a second socket share the port.
+
+    A machine without an IPv6 loopback fails the test; it does not skip. Without [::1] the
+    probe has no second address to wait on, so the bug could not show and a green run would
+    prove nothing.
+    """
     try:
-        started = time.monotonic()
-        assert watchdog.default_probe(server.getsockname()[1], 0.4, "localhost") is False
-        assert time.monotonic() - started < 1.0, "one timeout, not one per address"
+        with socket.socket(socket.AF_INET6) as probe:
+            probe.bind(("::1", 0))
+    except OSError as e:
+        pytest.fail(f"this test needs an IPv6 loopback ([::1]) and the machine has none: {e}")
+    last = None
+    for _ in range(attempts):
+        v4 = socket.socket(socket.AF_INET)
+        v6 = socket.socket(socket.AF_INET6)
+        try:
+            v4.bind(("127.0.0.1", 0))
+            v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            v6.bind(("::1", v4.getsockname()[1]))
+        except OSError as e:
+            last = e
+            v4.close()
+            v6.close()
+            continue
+        v4.listen()
+        v6.listen()
+        return v4, v6
+    pytest.fail(f"no port was free on both 127.0.0.1 and [::1] after {attempts} tries: {last}")
+
+
+def _connections_waiting(listener):
+    """How many connections the kernel has queued on `listener`, none of them accepted.
+
+    A connect() that succeeds has already completed the handshake, so its attempt is in this
+    queue by the time the probe moves on. Counting needs no thread and no timing."""
+    listener.setblocking(False)
+    count = 0
+    while True:
+        try:
+            conn, _ = listener.accept()
+        except (BlockingIOError, InterruptedError):
+            return count
+        conn.close()
+        count += 1
+
+
+def test_a_listener_that_accepts_and_never_answers_is_a_failed_probe_without_a_second_try():
+    """Both addresses of "localhost" hold a listener that never answers, so a probe that
+    moved on to the second address after the first timed out would wait twice. A timing check
+    cannot see that on POSIX when only one address listens, because a refused [::1] costs
+    nothing. The number of connections made can: exactly one, to whichever address the probe
+    tried first."""
+    v4, v6 = _loopback_pair_on_one_port()
+    try:
+        port = v4.getsockname()[1]
+        assert watchdog.default_probe(port, 1.0, "localhost") is False
+        attempts = {"127.0.0.1": _connections_waiting(v4), "::1": _connections_waiting(v6)}
+        assert sum(attempts.values()) == 1, \
+            f"one timeout, not one per address; connections made per address: {attempts}"
     finally:
-        server.close()
+        v4.close()
+        v6.close()
 
 
 # --- suspend versus stall, on the real supervisor thread --------------------------------
@@ -732,18 +785,45 @@ def test_the_supervisor_thread_counts_stalls_but_forgives_a_real_suspend():
                             exit_process=lambda: None, arm_dead_man=lambda s: None,
                             dump_stacks=lambda: events.append("dump"))
     dog._write = lambda text: None
+
+    # The jumps are applied by the supervisor thread itself, right after one of its ticks, so
+    # its two reads of the world (the clock, then the suspend counter) never straddle a jump
+    # made from the test thread. Each jump then waits for the next tick to complete: that
+    # tick sampled the clock after the jump, which is what "the supervisor ticked after it"
+    # means. A fixed sleep stood in for this, and a starved runner could skip a whole tick.
+    ticks = []                  # appended after each tick completes
+    todo = []                   # (slept, offset) jumps waiting for the end of a tick
+    applied = []                # tick count at which each jump was applied
+    real_tick = dog.tick
+
+    def tick_then_jump(now, gap, slept=None):
+        try:
+            return real_tick(now, gap, slept)
+        finally:
+            ticks.append(now)
+            if todo:
+                asleep, offset = todo.pop()
+                clock.slept += asleep
+                clock.offset += offset
+                applied.append(len(ticks))
+
+    dog.tick = tick_then_jump
+
+    def jump(asleep, offset):
+        todo.append((asleep, offset))
+        wait_until(lambda: not todo, "the supervisor applied the clock jump")
+        seen = applied[-1]
+        wait_until(lambda: len(ticks) > seen, "a supervisor tick ran after the clock jump")
+
     try:
         dog.start()
         for _ in range(4):                     # suspends: the clock jumps, the machine slept
-            clock.slept += 30
-            clock.offset += 30
-            time.sleep(0.2)
+            jump(30, 30)
         assert events == [], "a machine that slept is not a frozen server"
         for _ in range(3):                     # stalls: the clock jumps, nobody slept
-            clock.offset += 10
-            time.sleep(0.2)
-        assert wait_for(lambda: "restart" in events, timeout=5), (
-            "three stalls with healthy ticks between them must restart the server")
+            jump(0, 10)
+        wait_until(lambda: "restart" in events,
+                   "three stalls with healthy ticks between them restarted the server")
         assert "dump" in events
     finally:
         dog.stop()
@@ -836,10 +916,10 @@ BOUNDED = Config(heartbeat=0.02, tick=0.05, stale=0.2, bad_ticks=2, grace=0.3, d
                  probe_timeout=0.2, gap_forgive=5.0, handover_wait=0.4)
 
 
-def bounded_dog(**kw):
+def bounded_dog(cfg=BOUNDED, **kw):
     kw.setdefault("begin_restart", lambda t: None)
     kw.setdefault("exit_process", lambda: None)
-    dog = watchdog.Watchdog(BOUNDED, hang_file=None, bounded=True, arm_dead_man=lambda s: None,
+    dog = watchdog.Watchdog(cfg, hang_file=None, bounded=True, arm_dead_man=lambda s: None,
                             dump_stacks=lambda: None, mcp_port=lambda: 1, **kw)
     dog._write = lambda text: None
     for name in ("ws", "mcp"):
@@ -858,22 +938,27 @@ def test_a_probe_that_never_returns_cannot_hold_a_tick_and_counts_as_a_failure()
         release.wait(30)
         return True
 
-    dog = bounded_dog(probe=stuck)
+    # A second wait on the stuck worker would cost the full probe timeout, so the timeout is
+    # made long (1 s) and "no waiting again" is bounded at half of it: a regression misses
+    # by a wide margin and a descheduled test thread (tens of ms) cannot reach the bound.
+    cfg = dataclasses.replace(BOUNDED, probe_timeout=1.0)
+    dog = bounded_dog(cfg, probe=stuck)
     dog._probe_seen = True
     try:
         t0 = time.monotonic()
         obs = dog.observe(1.0, 5.0)
         first = time.monotonic() - t0
         assert obs.probe_ok is False
-        assert BOUNDED.probe_timeout <= first < BOUNDED.probe_timeout + 2
+        assert cfg.probe_timeout * 0.9 <= first < cfg.probe_timeout + 2
         t0 = time.monotonic()
         assert dog.observe(2.0, 5.0).probe_ok is False
-        assert time.monotonic() - t0 < 0.1, "the worker is still stuck: no waiting again"
+        assert time.monotonic() - t0 < cfg.probe_timeout / 2, (
+            "the worker is still stuck: no waiting again")
         assert calls == [1], "and no second probe was queued behind the stuck one"
     finally:
         release.set()
-    release_done = wait_for(lambda: dog.observe(3.0, 5.0).probe_ok is True, timeout=5)
-    assert release_done, "once the stuck call returns, probing works again"
+    wait_until(lambda: dog.observe(3.0, 5.0).probe_ok is True,
+               "probing worked again once the stuck call returned")
 
 
 def test_a_probe_that_answers_is_reported_as_before():
@@ -934,13 +1019,21 @@ def test_a_whole_recovery_with_the_loop_and_the_probe_faked():
     seconds."""
     events = []
     release = threading.Event()
+
+    def exit_process():
+        # A real exit takes the supervisor with it. Stopping the dog here does the same
+        # without waiting for the test thread to notice the event: a slow machine let the
+        # supervisor tick again in that gap and hand over twice.
+        events.append("exit")
+        dog.stop()
+
     dog = watchdog.Watchdog(
         BOUNDED, hang_file=None, bounded=True, arm_dead_man=lambda s: None,
         dump_stacks=lambda: events.append("dump"), mcp_port=lambda: 1,
         probe=lambda port, timeout, bound=None: release.wait(30) and False,
         begin_restart=lambda t: events.append(("restart", t)),
         hand_over=lambda: events.append("handover"),
-        exit_process=lambda: events.append("exit"))
+        exit_process=exit_process)
     dog._write = lambda text: None
     for name in ("ws", "mcp"):
         dog._beats[name] = watchdog.Heartbeat()
@@ -948,13 +1041,55 @@ def test_a_whole_recovery_with_the_loop_and_the_probe_faked():
     dog._probe_seen = True
     try:
         dog.start()
-        assert wait_for(lambda: "exit" in events, timeout=10), events
+        wait_until(lambda: "exit" in events, "the supervisor handed over and exited")
     finally:
         release.set()
         dog.stop()
     order = [e for e in events if e != "dump"]
     assert order == [("restart", "watchdog"), "handover", "exit"], events
     assert events.index("dump") < events.index(("restart", "watchdog"))
+
+
+def test_an_exit_that_returns_does_not_hand_the_server_over_again():
+    """`decide` answers FORCE_EXIT on every tick while the problem lasts. If the exit hook
+    comes back (TerminateProcess failed), the next tick must not spawn a second successor.
+    Stepped by hand, so no timing is involved."""
+    rig = Rig(begin_restart=lambda t: None,
+              hand_over=lambda: rig.events.append(("handover",)))
+    for _ in range(6 + int(CFG.grace / CFG.tick) + 5):      # five ticks past the first exit
+        rig.step(beat=("mcp",))
+    assert rig.kinds().count("handover") == 1, rig.events
+    assert rig.kinds().count("exit") == 1, rig.events
+
+
+def test_the_supervisor_thread_hands_over_and_exits_once_even_if_the_exit_returns():
+    """The exit hook returns (a test double does not end the process) and the supervisor
+    gets several more ticks before the test looks, as it did on the macOS CI runner on
+    2026-11-10. Counting probe calls, not sleeping, says when those ticks have happened."""
+    events = []
+    probes = []
+    dog = watchdog.Watchdog(
+        BOUNDED, hang_file=None, bounded=True, arm_dead_man=lambda s: None,
+        dump_stacks=lambda: None, mcp_port=lambda: 1,
+        probe=lambda port, timeout, bound=None: probes.append(1) or False,
+        begin_restart=lambda t: events.append(("restart", t)),
+        hand_over=lambda: events.append("handover"),
+        exit_process=lambda: events.append("exit"))
+    dog._write = lambda text: None
+    for name in ("ws", "mcp"):
+        dog._beats[name] = watchdog.Heartbeat()
+        dog._beats[name].last -= 100
+    dog._probe_seen = True
+    try:
+        dog.start()
+        wait_until(lambda: "exit" in events, "the supervisor exited", timeout=60)
+        seen = len(probes)
+        wait_until(lambda: len(probes) >= seen + 6,
+                   "the supervisor kept ticking after an exit that returned", timeout=60)
+    finally:
+        dog.stop()
+        dog._thread.join(5)
+    assert events.count("handover") == 1 and events.count("exit") == 1, events
 
 
 # --- ending the process ---------------------------------------------------------------------

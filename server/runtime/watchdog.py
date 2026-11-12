@@ -604,6 +604,7 @@ class Watchdog:
         self._log = _BackgroundLog()
         self._probe_seen = False
         self._probe_warned = False
+        self._ended = False         # the forced exit has run once; see `_act`
         self._leaving = leaving
         self._restarting = restarting
         self._probe = probe
@@ -759,6 +760,15 @@ class Watchdog:
         """Dump first, act second, log last: the stacks and the reason go straight into the
         hang file, and nothing here waits on a lock the frozen thread may hold."""
         if decision.action is Action.FORCE_EXIT:
+            # `decide` answers FORCE_EXIT again on every tick while the problem lasts.
+            # Production never sees a second one, because `exit_process` ends the process.
+            # A hook that returns (a failed TerminateProcess, a test double) would send the
+            # next tick through the hand-over again and start a second successor, so the
+            # server is handed over and ended once per process. The dead-man timer, which
+            # nothing re-arms while the problem lasts, backs up an exit that did not take.
+            if self._ended:
+                return
+            self._ended = True
             self.dump(f"forced exit: {why}")
             self._log.log(logging.CRITICAL,
                           "watchdog: still stuck %.0fs after the restart was requested "

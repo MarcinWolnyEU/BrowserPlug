@@ -18,6 +18,7 @@ import time
 import pytest
 
 from browserplug_shared import darwin_procs, proc_facts
+from wait_helper import wait_until
 
 DARWIN = sys.platform == "darwin"
 REAL_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
@@ -331,15 +332,15 @@ class TestLiveProcess:
 
     def test_an_exited_process_is_not_alive_even_before_it_is_reaped(self, probe):
         child = spawn("print('up', flush=True)")
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
+
+        def exited_but_not_reaped():
             try:
                 os.kill(child.pid, 0)
             except ProcessLookupError:
                 pytest.fail("the child was reaped")
-            if not probe.alive(child.pid):
-                break
-            time.sleep(0.05)
+            return not probe.alive(child.pid)
+
+        wait_until(exited_but_not_reaped, "the child exited and was no longer alive", interval=0.05)
         assert probe.alive(child.pid) is False
         os.kill(child.pid, 0)               # kill(0) still finds the zombie: the point of this test
         with pytest.raises(OSError):

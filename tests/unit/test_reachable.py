@@ -28,6 +28,7 @@ from server.reporting.net_addresses import ws_lan_addresses
 from server.server import BrowserPlugServer
 from server.ws.ws_auth import WS_CLOSE_UNAUTHORIZED, WS_TOKEN_ENDPOINT_PATH
 from browserplug_shared.ws_token import WS_TOKEN_ENV
+from wait_helper import DEFAULT_TIMEOUT, wait_until_async
 
 
 def _free_port():
@@ -44,17 +45,9 @@ def _hello_frame(token=None, instance_id="ff-a"):
     return {"type": "extension_hello", "data": data}
 
 
-async def _wait_until(predicate, what, timeout=5.0, interval=0.01):
-    deadline = asyncio.get_event_loop().time() + timeout
-    while not predicate():
-        if asyncio.get_event_loop().time() >= deadline:
-            raise AssertionError(f"timed out after {timeout}s waiting until {what}")
-        await asyncio.sleep(interval)
-
-
 def _http_get(url):
     """A plain blocking GET, like the check-host node would send (it speaks HTTP, not WS)."""
-    with urllib.request.urlopen(url, timeout=5) as response:
+    with urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT) as response:
         return response.status, dict(response.headers), response.read()
 
 
@@ -123,21 +116,21 @@ async def test_process_request_passes_websocket_handshakes_through(monkeypatch, 
         async with websockets.connect(url) as sock:
             await sock.send(json.dumps(_hello_frame()))
             with pytest.raises(websockets.exceptions.ConnectionClosed) as closed:
-                await asyncio.wait_for(sock.recv(), timeout=5.0)
+                await asyncio.wait_for(sock.recv(), timeout=DEFAULT_TIMEOUT)
         assert closed.value.rcvd.code == WS_CLOSE_UNAUTHORIZED
         endpoint = re.search(r"https?://\S+", closed.value.rcvd.reason).group(0)
         assert endpoint.endswith(WS_TOKEN_ENDPOINT_PATH)
 
         # 2. Fetch the token over HTTP (the MCP port, not the WS port).
-        with urllib.request.urlopen(endpoint, timeout=5) as response:
+        with urllib.request.urlopen(endpoint, timeout=DEFAULT_TIMEOUT) as response:
             token = json.loads(response.read())["token"]
 
         # 3. Reconnect with it — the handshake the hook must not have touched.
         from secure_ext import SecureClient
         async with websockets.connect(url) as sock:
             await SecureClient.connect(sock, token, _hello_frame())
-            await _wait_until(lambda: "ff-a" in server.browsers,
-                              "the bootstrapped browser registered")
+            await wait_until_async(lambda: "ff-a" in server.browsers,
+                                   "the bootstrapped browser registered")
     finally:
         ws_server.close()
         await ws_server.wait_closed()
@@ -234,7 +227,7 @@ async def test_extension_connection_close_is_a_coroutine():
     try:
         async with websockets.connect(f"ws://127.0.0.1:{port}") as client:
             await client.send(json.dumps(_hello_frame()))
-            await _wait_until(lambda: "ff-a" in server.browsers, "the browser registered")
+            await wait_until_async(lambda: "ff-a" in server.browsers, "the browser registered")
             conn = server.browsers["ff-a"].ws
             closing = conn.close()
             assert asyncio.iscoroutine(closing), (

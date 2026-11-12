@@ -36,6 +36,7 @@ import pytest
 from launcher import launcher
 from launcher.stdio_relay import StdioRelay, messages_from
 from test_relay_era import VERSION, Backend, modern_frame
+from wait_helper import wait_until
 
 _REPO_ROOT = str(__import__("pathlib").Path(launcher.__file__).resolve().parent.parent)
 _SHARED_PY = _REPO_ROOT + "/shared-py"
@@ -51,6 +52,25 @@ def hdrs(**kw):
 
 def sse(*frames):
     return "".join("event: message\ndata: %s\n\n" % f for f in frames)
+
+
+# How long a test keeps the relay's stdin open for the output it is waiting on. It is a hang
+# guard well above any healthy run, so a loaded runner does not close stdin early.
+HOLD_STDIN = 20.0
+
+
+def hold_stdin_until(cond, what, timeout=HOLD_STDIN):
+    """Keep a relay's input open until `cond()` holds; the caller then lets it see end of input.
+
+    A timeout is swallowed on purpose. The relay's reader thread can only finish once its
+    input ends, so end of input is sent either way, and the test's own assertions on what the
+    relay wrote report what is missing (an exception raised here would only surface in that
+    daemon thread and leave the relay's workers running).
+    """
+    try:
+        wait_until(cond, what, timeout=timeout)
+    except AssertionError:
+        pass
 
 
 def make_relay(out=None):
@@ -476,11 +496,15 @@ class TestSessionRaces:
     """
 
     @staticmethod
-    def start_backend(live, inits, slow_dead_call=None):
+    def start_backend(live, inits, on_initialize=None, on_dead_call=None,
+                      on_initialized=None):
+        """A fake MCP backend. The hooks run inside the request handler, before it answers,
+        so a test holds a reply back until the event it is about to assert on has happened:
+        `on_initialize()` for an initialize, `on_dead_call(id)` for a call carrying a session
+        that is not live, `on_initialized()` for the notification that finishes a rebuild."""
         import http.server
         import itertools
         import threading
-        import time
         counter = itertools.count(2)
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -502,16 +526,19 @@ class TestSessionRaces:
                 sid = self.headers.get("Mcp-Session-Id")
                 method, mid = msg.get("method"), msg.get("id")
                 if method == "initialize":
-                    time.sleep(0.2)     # one real round trip to the new server
                     new = "S{}".format(next(counter))
                     live.add(new)
                     inits.append(new)
+                    if on_initialize:
+                        on_initialize()
                     return self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {
                         "protocolVersion": "2025-06-18"}}, {"Mcp-Session-Id": new})
                 if method == "notifications/initialized":
+                    if on_initialized:
+                        on_initialized()
                     return self.reply(202, None)
-                if slow_dead_call == mid and sid not in live:
-                    time.sleep(0.6)     # this call's 404 lands after the rebuild
+                if sid not in live and on_dead_call:
+                    on_dead_call(mid)
                 if sid is None:
                     return self.reply(400, {"jsonrpc": "2.0", "id": None, "error": {
                         "code": -32600, "message": "Bad Request: Missing session ID"}})
@@ -524,13 +551,58 @@ class TestSessionRaces:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
-    def run_two_calls(self, slow_dead_call, gap):
+    @staticmethod
+    def run_two_calls(scenario):
+        """Two tools/calls, "A" and "B", on a relay whose session the server has lost.
+
+        Nothing here waits on the clock. Each reply a scenario needs late is held back until
+        the event it depends on has happened (the hooks of start_backend), with a 30 s
+        hang guard that the final assertions then report.
+
+        "during a rebuild": A finds the session dead and re-initializes, holding the relay's
+        session lock. B starts once that initialize has reached the backend and queues on
+        the lock; the backend answers the initialize only after B has asked for the lock.
+
+        "late 404": both calls go out on the dead session. The backend answers neither
+        until both have arrived, so B is in flight when A's rebuild starts, and then holds
+        B's 404 back until the rebuild's closing notifications/initialized has arrived.
+        """
         import io
         import threading
-        import time
-        live, inits = {"S1"}, []
-        live.discard("S1")      # the restart: the relay's S1 is gone
-        server = self.start_backend(live, inits, slow_dead_call)
+        live, inits = set(), []     # the restart: the relay's session "S1" is gone
+        init_started, b_asked, both_arrived = (threading.Event() for _ in range(3))
+        rebuilt, dead = threading.Event(), []
+        hooks = {}
+        if scenario == "during a rebuild":
+            def on_initialize():
+                init_started.set()
+                b_asked.wait(30)
+            hooks["on_initialize"] = on_initialize
+        else:
+            def on_dead_call(mid):
+                dead.append(mid)
+                if len(dead) == 2:
+                    both_arrived.set()
+                both_arrived.wait(30)
+                if mid == "B":
+                    rebuilt.wait(30)
+            hooks.update(on_dead_call=on_dead_call, on_initialized=rebuilt.set)
+        server = TestSessionRaces.start_backend(live, inits, **hooks)
+
+        class AskedFor:
+            """The relay's session lock, saying when thread B first asks for it."""
+
+            def __init__(self, lock):
+                self.lock = lock
+
+            def __enter__(self):
+                if threading.current_thread().name == "B":
+                    b_asked.set()
+                return self.lock.__enter__()
+
+            def __exit__(self, *exc):
+                return self.lock.__exit__(*exc)
+
         try:
             out = io.BytesIO()
             relay = StdioRelay(server.server_address[1], log=lambda *a: None,
@@ -539,14 +611,22 @@ class TestSessionRaces:
             relay._initialize_frame = (b'{"jsonrpc":"2.0","id":0,"method":"initialize",'
                                        b'"params":{}}')
             relay._session_id = "S1"
-            frames = ['{{"jsonrpc":"2.0","id":"{}","method":"tools/call","params":{{}}}}'
-                      .format(i) for i in "AB"]
-            threads = [threading.Thread(target=relay.handle_frame, args=(f,)) for f in frames]
-            for t in threads:
-                t.start()
-                time.sleep(gap)
-            for t in threads:
-                t.join(30)
+            relay._session_lock = AskedFor(relay._session_lock)
+            frames = {i: '{{"jsonrpc":"2.0","id":"{}","method":"tools/call","params":{{}}}}'
+                      .format(i) for i in "AB"}
+            threads = {i: threading.Thread(target=relay.handle_frame, args=(f,), name=i)
+                       for i, f in frames.items()}
+            threads["A"].start()
+            if scenario == "during a rebuild":
+                assert init_started.wait(30), "the rebuild never reached the backend"
+            threads["B"].start()
+            for t in threads.values():
+                t.join(60)
+            assert not any(t.is_alive() for t in threads.values()), "a call never finished"
+            if scenario == "during a rebuild":
+                assert b_asked.is_set(), "B never queued behind the rebuild"
+            else:
+                assert sorted(dead) == ["A", "B"], dead
             replies = {json.loads(l)["id"]: json.loads(l)
                        for l in out.getvalue().decode().splitlines()}
             return replies, inits
@@ -555,13 +635,13 @@ class TestSessionRaces:
             server.server_close()
 
     def test_a_call_during_a_rebuild_waits_for_the_new_session_not_none(self):
-        replies, inits = self.run_two_calls(slow_dead_call=None, gap=0.05)
+        replies, inits = self.run_two_calls("during a rebuild")
         assert sorted(replies) == ["A", "B"]
         assert all("result" in r for r in replies.values()), replies
         assert len(inits) == 1, inits
 
     def test_a_late_404_does_not_wipe_the_session_another_call_rebuilt(self):
-        replies, inits = self.run_two_calls(slow_dead_call="B", gap=0.0)
+        replies, inits = self.run_two_calls("late 404")
         assert sorted(replies) == ["A", "B"]
         assert all("result" in r for r in replies.values()), replies
         assert len(inits) == 1, "a second initialize replay orphans a server session: %s" % inits
@@ -701,17 +781,15 @@ class TestDeadlinesAndLanes:
     fake HTTP server so the transport, the pools and the deadline are all the real ones."""
 
     @staticmethod
-    def run_relay(relay, lines, until, hold=5.0):
-        """Feed `lines`, keep stdin open until `until()` is true or `hold` s pass."""
+    def run_relay(relay, lines, until, hold=HOLD_STDIN):
+        """Feed `lines`, keep stdin open until `until()` is true or `hold` s pass (a hang
+        guard: `until` is an event the relay produces, so the wait ends when it does)."""
         import threading
-        import time
 
         def stdin():
             for line in lines:
                 yield (line + "\n").encode()
-            end = time.monotonic() + hold
-            while not until() and time.monotonic() < end:
-                time.sleep(0.02)
+            hold_stdin_until(until, "the relay produced what the test waits for", hold)
 
         result = {}
         t = threading.Thread(target=lambda: result.update(rc=relay.run(stdin())),
@@ -723,12 +801,8 @@ class TestDeadlinesAndLanes:
     def frames(out):
         return [json.loads(l) for l in out.getvalue().decode().splitlines()]
 
-    def test_a_stream_that_only_pings_hits_an_overall_deadline(self):
-        """sse-starlette pings every 15 s, so a per-read timeout never fires on a wedged
-        call; the request needs a monotonic deadline of its own."""
-        import io
-        import threading
-        import time
+    def deadline_reply(self, budget):
+        """The reply to an `initialize` whose server pings forever, with `budget` s to answer."""
         import http.server
         stop = threading.Event()
 
@@ -757,21 +831,117 @@ class TestDeadlinesAndLanes:
                                host="127.0.0.1", out=out, poll_seconds=0)
             relay.report_timing = lambda *a: None
             for name in ("control_deadline_seconds", "tool_deadline_seconds"):
-                setattr(relay, name, 0.6)
+                setattr(relay, name, budget)
             t = threading.Thread(target=relay.handle_frame, daemon=True, args=(
                 '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{}}',))
-            started = time.monotonic()
             t.start()
-            t.join(4.0)
-            elapsed = time.monotonic() - started
+            # The stream pings for as long as the test lets it, so only the deadline can end
+            # the call. The guard sits under the 20 s default deadline of a control request,
+            # which is what a deadline that did not apply would run into.
+            t.join(15.0)
             assert not t.is_alive(), "handle_frame is still blocked on the ping stream"
-            assert elapsed < 3.0
-            reply = [f for f in self.frames(out) if f.get("id") == 9]
-            assert len(reply) == 1 and reply[0]["error"]["code"] == -32001
+            return [f for f in self.frames(out) if f.get("id") == 9]
         finally:
             stop.set()
             server.shutdown()
             server.server_close()
+
+    def test_a_stream_that_only_pings_hits_an_overall_deadline(self):
+        """sse-starlette pings every 15 s, so a per-read timeout never fires on a wedged
+        call; the request needs a monotonic deadline of its own."""
+        reply = self.deadline_reply(0.6)
+        assert len(reply) == 1 and reply[0]["error"]["code"] == -32001
+
+    def test_a_cut_made_before_the_clock_reaches_the_deadline_is_still_the_deadline(
+            self, monkeypatch):
+        """A timer can fire a clock tick before monotonic() reads the deadline (15.6 ms
+        ticks on Windows). The cut then reported -32603, "could not reach the shared server",
+        instead of -32001. SlowClock makes that gap certain: its monotonic() runs at a third
+        of real time, so when the real-time cut timer fires the relay's clock is still well
+        short of the deadline."""
+        from launcher import stdio_relay
+
+        class SlowClock:
+            def __init__(self):
+                self.base = time.monotonic()
+
+            def monotonic(self):
+                return self.base + (time.monotonic() - self.base) / 3
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        monkeypatch.setattr(stdio_relay, "time", SlowClock())
+        # The budget is also the socket timeout, and it must not win against the cut timer on
+        # a starved box, so it is far above any scheduling stall.
+        reply = self.deadline_reply(1.0)
+        assert len(reply) == 1 and reply[0]["error"]["code"] == -32001, reply
+
+    @staticmethod
+    def _bounded_read(monkeypatch, now, deadline, read, sock=None):
+        """Run StdioRelay._read_bounded against a fake response on a clock stuck at `now`."""
+        import types
+        from launcher import stdio_relay
+
+        monkeypatch.setattr(stdio_relay, "time", types.SimpleNamespace(monotonic=lambda: now))
+        raw = types.SimpleNamespace(_sock=sock)
+        response = types.SimpleNamespace(fp=types.SimpleNamespace(raw=raw), read=read)
+        return stdio_relay.StdioRelay._read_bounded(response, deadline)
+
+    @pytest.mark.parametrize("read_fails", [True, False], ids=["read raises", "read returns"])
+    def test_a_cut_is_the_deadline_whether_the_read_raises_or_returns(
+            self, monkeypatch, read_fails):
+        """The cut shuts the socket down. Windows raises from read() and Linux or macOS
+        usually returns EOF, so the end-to-end test above exercises one branch per platform.
+        This one drives both, with the relay's clock held well short of the deadline so only
+        the cut timer's flag can say it was the deadline."""
+        from launcher import stdio_relay
+
+        cut = threading.Event()
+
+        class Sock:
+            def shutdown(self, how):
+                cut.set()
+
+        def read():
+            assert cut.wait(15), "the cut timer never shut the socket down"
+            if read_fails:
+                raise ConnectionResetError("reset by the cut")
+            return b"partial"
+
+        with pytest.raises(stdio_relay.DeadlineExceeded):
+            self._bounded_read(monkeypatch, now=0.0, deadline=0.3, read=read, sock=Sock())
+
+    def test_a_reset_just_before_the_deadline_is_not_reported_as_the_deadline(
+            self, monkeypatch):
+        """Within the clock slack of the deadline a socket TIMEOUT is the deadline, but a
+        reset or truncation is a broken connection: answering -32001 for it would skip the
+        recovery and the replay on a fresh budget (send())."""
+        from launcher import stdio_relay
+
+        def reset():
+            raise ConnectionResetError("server restarted")
+
+        # No socket, so no cut timer: the classification rests on the exception alone.
+        with pytest.raises(ConnectionResetError):
+            self._bounded_read(monkeypatch, now=0.95, deadline=1.0, read=reset)
+
+        def truncated():
+            import http.client
+            raise http.client.IncompleteRead(b"par")
+
+        with pytest.raises(Exception) as caught:
+            self._bounded_read(monkeypatch, now=0.95, deadline=1.0, read=truncated)
+        assert not isinstance(caught.value, stdio_relay.DeadlineExceeded)
+
+        def timed_out():
+            raise TimeoutError("timed out")
+
+        with pytest.raises(stdio_relay.DeadlineExceeded):
+            self._bounded_read(monkeypatch, now=0.95, deadline=1.0, read=timed_out)
+
+        with pytest.raises(TimeoutError):  # a timeout with plenty of budget left is a real one
+            self._bounded_read(monkeypatch, now=0.5, deadline=1.0, read=timed_out)
 
     def test_ping_and_cancel_do_not_queue_behind_wedged_tool_calls(self, monkeypatch):
         import io
@@ -785,7 +955,7 @@ class TestDeadlinesAndLanes:
 
         def post(body, timeout=None):
             if b"tools/call" in body:
-                release.wait(8)
+                release.wait(60)
                 return 200, hdrs(Content_Type="application/json"), \
                     '{"jsonrpc":"2.0","id":1,"result":{}}'
             return 200, hdrs(Content_Type="application/json"), \
@@ -794,36 +964,49 @@ class TestDeadlinesAndLanes:
         relay.post = post
         lines = ['{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{}}' % i
                  for i in (1, 2, 3, 4)] + ['{"jsonrpc":"2.0","id":99,"method":"ping"}']
-        t, _ = self.run_relay(relay, lines,
-                              until=lambda: b'"id":99' in out.getvalue(), hold=3.0)
-        answered = b'"id":99' in out.getvalue() or _wait(
-            lambda: b'"id":99' in out.getvalue(), 2.0)
-        release.set()
-        t.join(10)
-        assert answered, "ping sat behind the wedged tools/call workers"
+        # The workers stay wedged until the ping has been answered or the guard runs out,
+        # so a ping queued behind them cannot be answered in time.
+        t, _ = self.run_relay(relay, lines, until=lambda: b'"id":99' in out.getvalue())
+        try:
+            wait_until(lambda: b'"id":99' in out.getvalue(),
+                       "the ping was answered although every tools/call worker is wedged")
+        finally:
+            release.set()
+        t.join(20)
 
     def test_end_of_input_drops_queued_tool_calls(self, monkeypatch):
         import io
         import threading
+        from concurrent.futures import ThreadPoolExecutor
         from launcher import stdio_relay
         monkeypatch.setattr(stdio_relay, "MAX_WORKERS", 1)
+        # The running call is held until the relay has cancelled what was queued behind it:
+        # a release on a timer could land first on a slow machine and let the queue run.
         release = threading.Event()
+        shutdown = ThreadPoolExecutor.shutdown
+
+        def shutdown_then_note(self, wait=True, *, cancel_futures=False):
+            shutdown(self, wait=wait, cancel_futures=cancel_futures)
+            if cancel_futures:
+                release.set()
+        monkeypatch.setattr(ThreadPoolExecutor, "shutdown", shutdown_then_note)
         started = []
         relay = make_relay(out=io.BytesIO())
         relay.report_timing = lambda *a: None
 
         def post(body, timeout=None):
             started.append(body)
-            release.wait(5)
+            release.wait(30)
             return 200, hdrs(Content_Type="application/json"), \
                 '{"jsonrpc":"2.0","id":1,"result":{}}'
 
         relay.post = post
         lines = ['{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{}}' % i
                  for i in (1, 2, 3)]
-        threading.Timer(0.5, release.set).start()
-        t, _ = self.run_relay(relay, lines, until=lambda: True)
-        t.join(10)
+        # The client leaves once the first call is running and the other two wait behind it.
+        t, _ = self.run_relay(relay, lines, until=lambda: len(started) >= 1)
+        t.join(20)
+        assert release.is_set(), "the relay never cancelled its queue"
         assert len(started) == 1, "queued tools/call still ran after the client left"
 
     def test_unparseable_and_batch_frames_are_answered(self):
@@ -846,16 +1029,6 @@ class TestDeadlinesAndLanes:
         assert any(f.get("id") == 5 and "error" in f for f in got), got
         assert any(f.get("id") is None and f.get("error", {}).get("code") == -32600
                    for f in got), got
-
-
-def _wait(cond, seconds):
-    import time
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        if cond():
-            return True
-        time.sleep(0.02)
-    return cond()
 
 
 class TestRecovery:
@@ -982,22 +1155,40 @@ class TestRecovery:
 
         def recover():
             calls.append(1)
-            gate.wait(2)
+            gate.wait(30)
             return 2831
+
+        class Asked:
+            """The recovery lock, counting the threads that have asked for it."""
+
+            def __init__(self, lock):
+                self.lock, self.asks = lock, []
+
+            def __enter__(self):
+                self.asks.append(threading.current_thread().name)
+                return self.lock.__enter__()
+
+            def __exit__(self, *exc):
+                return self.lock.__exit__(*exc)
 
         relay = self.relay_with(self.refused(), self.refused(), self.ok(1), self.ok(2),
                                 recover=recover)
+        relay._recovery_lock = Asked(relay._recovery_lock)
         threads = [threading.Thread(target=relay.handle_frame, args=(json.dumps(
             {"jsonrpc": "2.0", "id": i, "method": "ping"}),)) for i in (1, 2)]
         for t in threads:
             t.start()
-        deadline = time.time() + 5
-        while not calls and time.time() < deadline:
-            time.sleep(0.01)
-        time.sleep(0.3)     # let the second thread reach the lock
+        # One thread is inside recover() and the other has asked for the lock behind it:
+        # only then is the recovery released.
+        asked = relay._recovery_lock.asks
+        try:
+            wait_until(lambda: calls and len(asked) >= 2,
+                       "one thread was in recover() and the other asked for the lock")
+        except AssertionError as e:
+            raise AssertionError(f"{e}: {calls=} {asked=}") from None
         gate.set()
         for t in threads:
-            t.join(5)
+            t.join(20)
         assert calls == [1]
         assert sorted(f["id"] for f in self.frames(relay)) == [1, 2]
         assert all("error" not in f for f in self.frames(relay))
@@ -1252,7 +1443,7 @@ class TestModern:
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
             handler.end_headers()
-            end = time.monotonic() + 15
+            end = time.monotonic() + 60
             try:
                 while time.monotonic() < end and not server.release.is_set():
                     handler.wfile.write(b": ping\n\n")
@@ -1267,7 +1458,8 @@ class TestModern:
         relay.tool_deadline_seconds = 0.6
         started = time.monotonic()
         relay.handle_frame(json.dumps(modern_frame("tools/call", 9, name="page_read")))
-        assert time.monotonic() - started < 4
+        # The stream pings for a minute; only the 0.6 s deadline ends the call sooner.
+        assert time.monotonic() - started < 30
         reply = written(relay)
         assert len(reply) == 1 and reply[0]["id"] == 9 and reply[0]["error"]["code"] == -32001
 
@@ -1359,13 +1551,12 @@ class TestModern:
 
         def script():
             yield modern_frame("tools/call", 5, name="slow", arguments={})
-            seen["started"] = server.started.wait(5)
+            seen["started"] = server.started.wait(20)
             yield cancel_frame(5)
-            seen["disconnected"] = server.disconnected.wait(5)
+            seen["disconnected"] = server.disconnected.wait(20)
             yield modern_frame("tools/list", 6)
-            end = time.monotonic() + 5
-            while time.monotonic() < end and not any(f.get("id") == 6 for f in written(relay)):
-                time.sleep(0.02)
+            hold_stdin_until(lambda: any(f.get("id") == 6 for f in written(relay)),
+                             "the tools/list after the cancel was answered")
 
         thread = self.run_script(relay, script)
         thread.join(20)
@@ -1581,9 +1772,7 @@ class TestModern:
         def script():
             yield modern_frame("tools/list", 1)
             yield modern_frame("tools/list", 2)
-            end = time.monotonic() + 5
-            while time.monotonic() < end and len(written(relay)) < 2:
-                time.sleep(0.02)
+            hold_stdin_until(lambda: len(written(relay)) >= 2, "both frames were answered")
 
         thread = self.run_script(relay, script)
         thread.join(20)
@@ -1598,9 +1787,7 @@ class TestModern:
         relay = make_modern_relay(server.port)
         def script():
             yield modern_frame("tools/list", 1)
-            end = time.monotonic() + 5
-            while time.monotonic() < end and not written(relay):
-                time.sleep(0.02)
+            hold_stdin_until(lambda: written(relay), "the frame was answered")
 
         thread = self.run_script(relay, script)
         thread.join(20)

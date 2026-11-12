@@ -6,8 +6,10 @@ Origin-carrying request is refused as a second layer. Side effects are mocked: n
 restarts or stops anything.
 """
 
+import asyncio
 import json
 import os
+import threading
 
 import pytest
 
@@ -15,6 +17,7 @@ from secure_ext import signed_headers
 from test_http_endpoints import REMOTE_PEER, _server, call
 from server.web import http_endpoints
 from server.reporting import wan_diagnosis
+from wait_helper import wait_until_async
 
 CONTROL_ROUTES = [("POST", "/restart"), ("POST", "/shutdown"), ("POST", "/timing"),
                   ("GET", "/diagnose-wan")]
@@ -25,6 +28,7 @@ class Effects:
 
     def __init__(self):
         self.calls = []
+        self.shutdown_threads = []      # every thread /shutdown started, whether or not it ran on
 
 
 @pytest.fixture
@@ -39,6 +43,16 @@ def effects(monkeypatch):
     monkeypatch.setattr(wan_diagnosis, "_CACHE", {}, raising=False)
     # /shutdown ends in os._exit on a timer thread; never let a test reach the real one.
     monkeypatch.setattr(os, "_exit", lambda code: fx.calls.append(f"exit{code}"))
+
+    class RecordingThread(threading.Thread):
+        def start(self):
+            fx.shutdown_threads.append(self)
+            super().start()
+
+    # Only /shutdown starts a thread in this module, so a refusal can be asserted by "no
+    # thread was started" instead of by waiting out the thread's delay and seeing no exit.
+    monkeypatch.setattr(http_endpoints, "threading",
+                        type("Threading", (), {"Lock": threading.Lock, "Thread": RecordingThread}))
     return fx
 
 
@@ -85,37 +99,36 @@ async def test_a_browser_cross_site_request_is_refused_even_when_signed(
     ("POST", "/restart", "restart"), ("POST", "/shutdown", "exit0"),
     ("POST", "/timing", "timing"), ("GET", "/diagnose-wan", "diagnose")])
 async def test_a_signed_request_reaches_the_handler(method, path, marker, effects):
-    import asyncio
     server, app = _app(effects)
     status, _, _ = await call(app, method, path,
                               headers=signed_headers(server, method, path, body=b"{}"),
                               body=b"{}")
     assert status == 200
-    if marker == "exit0":
-        await asyncio.sleep(0.6)
-    assert marker in effects.calls
+    # /shutdown exits on a timer thread after flushing its reply, so a handler's effect can
+    # land after the response.
+    await wait_until_async(lambda: marker in effects.calls, f"{marker!r} happened")
 
 
 @pytest.mark.asyncio
 async def test_shutdown_during_a_restart_is_refused_so_the_replacement_is_not_orphaned(effects):
     """A stop that ended only the old server would leave the replacement it spawned running
     on the ports. 409 asks the caller to retry once the restart is over."""
-    import asyncio
     server, app = _app(effects)
     server.lifecycle.restarting = True
     status, _, body = await call(app, "POST", "/shutdown",
                                  headers=signed_headers(server, "POST", "/shutdown", body=b"{}"),
                                  body=b"{}")
-    await asyncio.sleep(0.6)
     assert status == 409
     assert "restart is in progress" in json.loads(body)["error"]
+    assert effects.shutdown_threads == [], "the process must not be set up to exit"
     assert effects.calls == [], "the process must not exit"
     server.lifecycle.restarting = False                 # the restart ended or was abandoned
     status, _, _ = await call(app, "POST", "/shutdown",
                               headers=signed_headers(server, "POST", "/shutdown", body=b"{}"),
                               body=b"{}")
-    await asyncio.sleep(0.6)
-    assert status == 200 and effects.calls == ["exit0"]
+    assert status == 200
+    await wait_until_async(lambda: "exit0" in effects.calls, "the process exited (exit0)")
+    assert effects.calls == ["exit0"] and len(effects.shutdown_threads) == 1
 
 
 @pytest.mark.asyncio
@@ -164,7 +177,6 @@ async def test_diagnose_wan_is_cached_briefly(effects, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_powershell_timeout_kills_the_child(monkeypatch):
-    import asyncio
     killed = []
 
     class Hung:

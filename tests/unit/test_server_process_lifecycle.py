@@ -42,6 +42,7 @@ from browserplug_shared import device_tokens, proc_facts, request_signing, serve
 from browserplug_shared.config_store import STATE_DIR_ENV
 from browserplug_shared.mcp_port import DETACHED_ENV, LOG_FILE_ENV, MCP_PORT_ENV, browserplug_health
 from browserplug_shared.ws_token import WS_HOST_ENV, WS_TOKEN_ENV, WS_TOKEN_FILE_ENV
+from wait_helper import wait_until
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER_SCRIPT = ROOT / "server" / "server.py"
@@ -110,24 +111,22 @@ class Sandbox:
 
     def wait_healthy(self, timeout=START_TIMEOUT, not_pid=None):
         """The /health of a server on this sandbox's port; `not_pid` waits out an old one."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+
+        def healthy():
             data = self.health()
-            if data and data["server_pid"] != not_pid:
-                return data
-            time.sleep(0.2)
-        raise AssertionError(f"no healthy server on :{self.mcp_port} within {timeout:.0f}s\n"
-                             + self.diagnostics())
+            return data if data and data["server_pid"] != not_pid else None
+
+        try:
+            return wait_until(healthy, f"a healthy server answered on :{self.mcp_port}",
+                              timeout=timeout, interval=0.2)
+        except AssertionError as e:
+            raise AssertionError(f"{e}\n" + self.diagnostics()) from None
 
     def wait_gone(self, pid, timeout=20.0):
         # pid_alive, not psutil.pid_exists: a server this test started and has not waited
         # for is a zombie once it exits, and pid_exists (kill 0) reports a zombie as there.
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not proc_facts.pid_alive(pid):
-                return
-            time.sleep(0.1)
-        raise AssertionError(f"process {pid} is still alive after {timeout:.0f}s")
+        wait_until(lambda: not proc_facts.pid_alive(pid), f"process {pid} ended",
+                   timeout=timeout, interval=0.1)
 
     def log_text(self):
         parts = []
@@ -362,10 +361,8 @@ def test_a_started_server_answers_on_its_own_ports_and_the_lock_is_taken(sandbox
     assert proc.poll() is None
     # /health can answer a beat before the WebSocket listener binds. The old connect probe
     # took ~2 s per call and so hid that gap; the bind probe is instant, so wait for it.
-    deadline = time.monotonic() + 10
-    while not lifecycle.is_port_in_use(sandbox.ws_port) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert lifecycle.is_port_in_use(sandbox.ws_port), "the WebSocket port is held"
+    wait_until(lambda: lifecycle.is_port_in_use(sandbox.ws_port), "the WebSocket port was held",
+               interval=0.1)
     assert other_process_can_lock(sandbox.ws_port) is False, "and so is the instance lock"
 
 
@@ -389,9 +386,12 @@ def test_two_servers_started_together_leave_exactly_one(sandbox):
     first, second = sandbox.start(), sandbox.start()
     winner = sandbox.wait_healthy()
 
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and all(p.poll() is None for p in (first, second)):
-        time.sleep(0.1)
+    try:
+        # 30 s, not the default: both servers cold-import the whole stack while they race.
+        wait_until(lambda: any(p.poll() is not None for p in (first, second)),
+                   "one of the two servers exited", timeout=30, interval=0.1)
+    except AssertionError as e:
+        raise AssertionError(f"{e}\n" + sandbox.diagnostics()) from None
     exited = [p for p in (first, second) if p.poll() is not None]
     assert len(exited) == 1, ("exactly one of the two exits: "
                             + sandbox.diagnostics())

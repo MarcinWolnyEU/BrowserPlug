@@ -115,6 +115,21 @@ def test_a_launcher_py_in_a_checkout_named_for_the_project_is_ours_whatever_the_
     assert client_identity.is_launcher_process(proc) is True
 
 
+def test_a_checkout_in_a_mixed_case_directory_is_ours_where_paths_keep_their_case(
+        monkeypatch):
+    """normcase folds case on Windows only. On macOS and Linux a checkout in `BrowserPlug`,
+    as on the GitHub runner, reached the name test with its capitals and was taken for a
+    stranger. Case folding is switched off here, so the answer is the POSIX one."""
+    monkeypatch.setattr(os.path, "normcase", lambda path: path)
+    checkout = os.path.join(os.path.abspath(os.sep), "Users", "runner", "work",
+                            "BrowserPlug", "BrowserPlug")
+    launcher = FakeProc(501, [UV_PYTHON, "launcher.py"], cwd=checkout)
+    proxy = FakeProc(502, [UV_PYTHON, os.path.join(checkout, "server", "proxy", "__main__.py")],
+                     cwd=ELSEWHERE)
+    assert client_identity.is_launcher_process(launcher) is True
+    assert client_identity.is_proxy_process(proxy) is True
+
+
 def test_a_cwd_that_is_not_absolute_here_places_nothing(monkeypatch, tmp_path):
     """A Windows `C:\\...` cwd read on POSIX is a relative path. Resolving it against the
     server's cwd put every such `launcher.py` under that directory, and when the checkout
@@ -638,16 +653,52 @@ def test_a_hostile_argument_is_described_in_milliseconds(name):
     start = time.perf_counter()
     line = client_identity.sanitized_cmdline(argv)
     elapsed = time.perf_counter() - start
-    assert elapsed < 0.05, f"{name}: {elapsed * 1000:.0f} ms"
+    # This guards the per-argument input cut and the display bound, not the pattern: with the
+    # 1024-character cut in place even the old backtracking pattern costs only about 0.8 s per
+    # argument, which 2 s lets through. The pattern itself is pinned by the next test, on
+    # input that is not cut.
+    assert elapsed < 2.0, f"{name}: {elapsed * 1000:.0f} ms"
     assert line is None or len(line) <= 501
 
 
-def test_a_thousand_arguments_cost_no_more_than_the_line_that_can_be_shown():
+@pytest.mark.parametrize("name", sorted(HOSTILE_ARGUMENTS))
+def test_the_masking_pattern_is_linear_on_input_that_was_not_cut(name):
+    """`_mask_secret_text` on 2000 characters, forwards and backwards, with no input cut in
+    front of it, so a backtracking pattern cannot hide behind the 1024-character limit.
+
+    Measured on this box (Windows, Python 3.12), worst case over the ten inputs: the linear
+    pattern takes 2 ms. The old pattern, with a backtracking name match on both sides of the
+    keyword, takes 5.7 s (4000 characters took 51 s on 2026-10-02). 0.5 s sits 250x above
+    the fixed pattern, so a runner 100x slower still passes, and 11x below the regression.
+    """
     import time
-    start = time.perf_counter()
-    line = client_identity.sanitized_cmdline(["prog"] + ["--flag", "value" * 50] * 5000)
-    assert time.perf_counter() - start < 0.05
-    assert line.startswith("prog --flag")
+    text = HOSTILE_ARGUMENTS[name][:2000]
+    for sample in (text, text[::-1]):
+        start = time.perf_counter()
+        client_identity._mask_secret_text(sample)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.5, f"{name}: {elapsed * 1000:.0f} ms for {len(sample)} characters"
+
+
+def test_a_thousand_arguments_cost_no_more_than_the_line_that_can_be_shown():
+    """The loop stops once the line is full, so 10,000 arguments cost what 100 do. A
+    comparison between the two sizes holds on any machine speed, where a fixed bound
+    would not: reading all of them takes about 100x as long (roughly 0.5 s here)."""
+    import time
+
+    def best_of_five(pairs):
+        argv = ["prog"] + ["--flag", "value" * 50] * pairs
+        runs = []
+        for _ in range(5):
+            start = time.perf_counter()
+            line = client_identity.sanitized_cmdline(argv)
+            runs.append(time.perf_counter() - start)
+        assert line.startswith("prog --flag")
+        return min(runs)
+
+    few, many = best_of_five(50), best_of_five(5000)
+    # 10x plus 50 ms of room for scheduler noise on a runner with 3 vCPUs.
+    assert many < 10 * few + 0.05, f"50 pairs {few * 1000:.2f} ms, 5000 pairs {many * 1000:.2f} ms"
 
 
 def test_a_quoted_secret_is_masked_even_when_the_argument_was_cut_before_its_quote_closed():
@@ -739,18 +790,154 @@ def test_a_session_is_looked_up_once_not_on_every_request():
         "a lookup already started for this session; the second request must not start one")
 
 
-def test_an_unresolved_peer_is_tried_again_but_not_on_every_request(monkeypatch):
+def test_an_unresolved_peer_is_tried_again_at_once_a_few_times_then_every_few_seconds(
+        monkeypatch):
+    """A lookup that found nothing is repeated by the very next request, because the usual
+    reason is a connection that had closed before the table was read. Past
+    IDENTITY_MISS_RETRIES it is not repeated on every request: each try reads the table."""
     clients = {}
     now = [100.0]
     monkeypatch.setattr(client_identity, "time", types.SimpleNamespace(monotonic=lambda: now[0]))
-    entry = client_identity.note_http_client(clients, "s1", ("127.0.0.1", 5000))
+    peer = ("127.0.0.1", 5000)
     with patch.object(client_identity, "resolve_client_chain", lambda port: (None, None)), \
             patch.object(client_identity, "describe_pid", lambda pid: {"pid": None}):
-        client_identity.identify_http_client(entry, ("127.0.0.1", 5000))
+        for attempt in range(1 + client_identity.IDENTITY_MISS_RETRIES):
+            entry = client_identity.note_http_client(clients, "s1", peer)
+            assert entry is not None, f"attempt {attempt + 1} must follow the last one at once"
+            client_identity.identify_http_client(entry, peer)
     assert entry["identified"] is False
-    assert client_identity.note_http_client(clients, "s1", ("127.0.0.1", 5000)) is None
+    assert client_identity.note_http_client(clients, "s1", peer) is None
     now[0] += client_identity.IDENTITY_RETRY_SECONDS + 0.1
-    assert client_identity.note_http_client(clients, "s1", ("127.0.0.1", 5000)) is entry
+    assert client_identity.note_http_client(clients, "s1", peer) is entry
+
+
+def test_a_lookup_in_flight_is_not_started_a_second_time():
+    """The quick retry waits for the attempt to end; two requests of one session that
+    arrive while it runs share it."""
+    clients = {}
+    peer = ("127.0.0.1", 5000)
+    assert client_identity.note_http_client(clients, "s1", peer) is not None
+    assert client_identity.note_http_client(clients, "s1", peer) is None
+
+
+def test_a_repeat_waits_until_the_lookup_that_missed_has_cleared_its_flag():
+    """The worker re-opens the session inside identify_http_client; the HTTP layer clears
+    `identity_pending` from the future's callback a moment later. A request that lands in
+    that gap must not start a second lookup over the first one's bookkeeping."""
+    clients = {}
+    peer = ("127.0.0.1", 5000)
+    entry = client_identity.note_http_client(clients, "s1", peer)
+    entry["identity_pending"] = True
+    with patch.object(client_identity, "resolve_client_chain", lambda port: (None, None)), \
+            patch.object(client_identity, "describe_pid", lambda pid: {"pid": None}):
+        client_identity.identify_http_client(entry, peer)
+    assert entry["identity_tried"] is None, "the miss re-opened the session"
+    assert client_identity.note_http_client(clients, "s1", peer) is None
+    entry["identity_pending"] = False
+    assert client_identity.note_http_client(clients, "s1", peer) is entry
+
+
+FORWARDED = 4242
+
+
+def _identified_as(forwarded_pid, chain):
+    """identify_http_client over a stand-in chain; the entry it filled."""
+    clients = {}
+    peer = ("127.0.0.1", 5000)
+    entry = client_identity.note_http_client(clients, "s1", peer, forwarded_pid)
+    with patch.object(client_identity, "resolve_client_chain", lambda port: chain), \
+            patch.object(client_identity, "describe_pid",
+                         lambda pid: {"pid": pid, "friendly": "Claude Code",
+                                      "start_time": f"t{pid}"}):
+        client_identity.identify_http_client(entry, peer, forwarded_pid)
+    return clients, entry
+
+
+def test_a_forwarded_pid_does_not_count_as_finding_the_peer():
+    """The stdio launcher names the client in a header, so a pid is known before the table
+    is read. A lookup that missed the peer's socket must still be repeated: it is the
+    table that knows whether a launcher sits in between."""
+    clients, entry = _identified_as(FORWARDED, (None, None))
+    assert (entry["pid"], entry["friendly"]) == (FORWARDED, "Claude Code")
+    assert entry["launcher_pid"] is None
+    assert entry["identified"] is False, "a miss must not be filed as an answer"
+    assert client_identity.note_http_client(clients, "s1", ("127.0.0.1", 5001),
+                                            FORWARDED) is entry
+
+
+def test_the_repeat_that_finds_the_peer_names_the_launcher_and_settles():
+    clients, entry = _identified_as(FORWARDED, (None, None))
+    peer = ("127.0.0.1", 5001)
+    assert client_identity.note_http_client(clients, "s1", peer, FORWARDED) is entry
+    with patch.object(client_identity, "resolve_client_chain", lambda port: (FORWARDED, 5100)), \
+            patch.object(client_identity, "describe_pid",
+                         lambda pid: {"pid": pid, "start_time": f"t{pid}"}):
+        client_identity.identify_http_client(entry, peer, FORWARDED)
+    assert entry["identified"] is True and entry["launcher_pid"] == 5100
+    assert entry["launcher_start_time"] == "t5100" and entry["identity_misses"] == 0
+    assert client_identity.note_http_client(clients, "s1", peer, FORWARDED) is None
+
+
+def test_a_launcher_that_never_shows_in_the_table_settles_on_the_forwarded_pid():
+    """After IDENTITY_MISS_RETRIES repeats the session keeps what the header said and is
+    not looked up again: a peer that cannot be read (another account's) costs a bounded
+    number of table reads, not one per request."""
+    clients, entry = _identified_as(FORWARDED, (None, None))
+    peer = ("127.0.0.1", 5001)
+    for _ in range(client_identity.IDENTITY_MISS_RETRIES):
+        assert client_identity.note_http_client(clients, "s1", peer, FORWARDED) is entry
+        with patch.object(client_identity, "resolve_client_chain", lambda port: (None, None)), \
+                patch.object(client_identity, "describe_pid",
+                             lambda pid: {"pid": pid, "friendly": "Claude Code"}):
+            client_identity.identify_http_client(entry, peer, FORWARDED)
+    assert entry["identified"] is True and entry["pid"] == FORWARDED
+    assert entry["launcher_pid"] is None
+    assert client_identity.note_http_client(clients, "s1", peer, FORWARDED) is None
+
+
+def test_a_request_with_no_peer_port_is_not_repeated():
+    """Nothing to look up the second time either."""
+    clients = {}
+    entry = client_identity.note_http_client(clients, "s1", None, FORWARDED)
+    with patch.object(client_identity, "resolve_client_chain", lambda port: (None, None)), \
+            patch.object(client_identity, "describe_pid",
+                         lambda pid: {"pid": pid, "friendly": "Claude Code"}):
+        client_identity.identify_http_client(entry, None, FORWARDED)
+    assert entry["identified"] is True
+
+
+def test_the_table_read_is_announced_before_any_process_is_walked(fake_psutil):
+    """`on_peer_read` is what lets a request let go of its connection: it has to come
+    right after the table read and before the walk, which is the slow part."""
+    events = []
+    _proxy_chain(fake_psutil)
+    walked = fake_psutil[5300]
+    real_cmdline = walked.cmdline
+    walked.cmdline = lambda: events.append("walk") or real_cmdline()
+
+    def read_table(port):
+        events.append("table")
+        return 5300
+
+    with patch.object(client_identity, "pid_for_local_port", read_table):
+        assert client_identity.resolve_client_chain(
+            4242, lambda: events.append("signal")) == (5000, 5100)
+    assert events[:2] == ["table", "signal"]
+    assert "walk" in events[2:]
+
+
+def test_the_table_read_is_announced_even_when_the_lookup_raises():
+    announced = []
+
+    def boom(port, on_peer_read=None):
+        raise RuntimeError("the table could not be read")
+
+    entry = client_identity.note_http_client({}, "s1", ("127.0.0.1", 5000))
+    with patch.object(client_identity, "resolve_client_chain", boom):
+        with pytest.raises(RuntimeError):
+            client_identity.identify_http_client(entry, ("127.0.0.1", 5000), None,
+                                                 lambda: announced.append(1))
+    assert announced == [1], "a request waiting on the read must not wait for its bound"
 
 
 def test_a_request_without_a_session_or_a_way_to_name_its_client_files_nothing():

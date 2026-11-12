@@ -36,6 +36,7 @@ from server.tools import list_changed
 from server.tools import list_changed_policy
 from server.tools import mcp_server as mcp_server_mod
 from server.tools import mcp_tools as mcp_tools_mod
+from wait_helper import wait_until_async as wait_until
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +50,19 @@ NINE = ["tabs", "navigate", "page_read", "page_snapshot", "page_act", "page_eval
 # Helpers (test_e2e_list_changed.py imports them)
 # =============================================================================
 
-async def wait_until(predicate, what, timeout=10.0):
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        assert time.monotonic() < deadline, f"timed out waiting for {what}"
-        await asyncio.sleep(0.02)
+async def settled(binding, client):
+    """Wait until `binding` has nothing armed, announcing or owed, then until the client has
+    handled everything the server sent before this call. Replaces a sleep that was long
+    enough on the machine it was written on: a count read after this is final for the
+    changes made so far. The round trip is the flush: the pushes sit ahead of its reply on
+    the same stream, and the client handles them in order.
+
+    Call it only after the loop has had a turn since the change was made (any await does):
+    a change made through call_soon_threadsafe arms the binding on that turn."""
+    await wait_until(lambda: not (binding.gate.pending or binding._timer is not None
+                                  or binding._broadcasting or binding._again),
+                     "the debounce to settle and the broadcast to end")
+    await client.list_tools()
 
 
 class Heard:
@@ -219,7 +228,7 @@ async def test_a_change_on_another_thread_reaches_an_http_client_once(monkeypatc
             await wait_until(lambda: app.open == 1, "the client's GET stream")
             ran_on = await asyncio.to_thread(reshape, tools, roster, "two browsers")
             assert ran_on is not live.thread and ran_on is not threading.main_thread()
-            await wait_until(lambda: len(heard) >= 1, "tools/list_changed", timeout=3)
+            await wait_until(lambda: len(heard) >= 1, "tools/list_changed")
             await asyncio.sleep(1.0)
             assert len(heard) == 1, "one change, one notification"
             assert names(await client.list_tools()) == NINE + ["browsers"]
@@ -251,10 +260,11 @@ async def test_a_session_without_a_get_stream_hears_nothing_extra(monkeypatch):
             await tools_list(1)
             change = asyncio.create_task(asyncio.to_thread(reshape, tools, roster, "two"))
             msg_id = 2
+            give_up = time.monotonic() + 30
             while len(heard) < 1:
                 await tools_list(msg_id)
                 msg_id += 1
-                assert msg_id < 500, "no push reached the GET-holding client"
+                assert time.monotonic() < give_up, "no push reached the GET-holding client"
             await change
             for _ in range(10):
                 await tools_list(msg_id)
@@ -343,13 +353,12 @@ async def test_every_live_binding_serves_its_own_loop(monkeypatch):
                     await wait_until(lambda: first.open == 1, "the first GET stream")
                     await asyncio.to_thread(reshape, tools, roster, "two")
                     await wait_until(lambda: len(heard_first) and len(heard_second),
-                                     "both clients told", timeout=3)
+                                     "both clients told")
                     await asyncio.sleep(0.6)
                     assert (len(heard_first), len(heard_second)) == (1, 1)
             # The first uvicorn is gone; the second binding still serves.
             await asyncio.to_thread(reshape, tools, roster, None)
-            await wait_until(lambda: len(heard_second) == 2, "the second told again",
-                             timeout=3)
+            await wait_until(lambda: len(heard_second) == 2, "the second told again")
 
 
 # =============================================================================
@@ -360,10 +369,17 @@ async def test_a_burst_and_a_flip_back_each_give_one_and_a_no_op_gives_none(
         monkeypatch, small_debounce):
     tools, roster = _server().mcp_tools, Roster(monkeypatch)
     heard = Heard()
-    async with tools.mcp.list_changed.running():
-        async with Client(tools.mcp, mode="legacy", message_handler=heard):
-            await asyncio.to_thread(reshape, tools, roster, *[f"r{i}" for i in range(6)])
-            await asyncio.sleep(0.6)
+    async with tools.mcp.list_changed.running() as binding:
+        async with Client(tools.mcp, mode="legacy", message_handler=heard) as client:
+            # Joined from the loop's own thread, like the flip below: all six change callbacks
+            # are queued before the first runs, so the quiet period cannot elapse between two
+            # of them however long the thread is descheduled.
+            burst = threading.Thread(target=reshape,
+                                     args=(tools, roster, *[f"r{i}" for i in range(6)]))
+            burst.start()
+            burst.join()
+            await wait_until(lambda: len(heard) >= 1, "the burst to be announced")
+            await settled(binding, client)
             assert len(heard) == 1, "six changes inside the quiet period are one"
 
             before = tools.tools_signature
@@ -374,56 +390,149 @@ async def test_a_burst_and_a_flip_back_each_give_one_and_a_no_op_gives_none(
             flip.start()
             flip.join()
             assert tools.tools_signature == before
-            await asyncio.sleep(0.6)
+            await wait_until(lambda: len(heard) >= 2, "the flip back to be announced")
+            await settled(binding, client)
             assert len(heard) == 2, ("a change undone inside the window is announced: a "
                                      "client may have listed the surface in between")
 
+            # Both calls have returned, so the loop has seen their change callbacks: a
+            # recompute that armed anything would leave the binding unsettled until it pushed.
             await asyncio.to_thread(tools._recompute_tools_signature)
             await asyncio.to_thread(reshape, tools, roster, "r5")
-            await asyncio.sleep(0.6)
+            await settled(binding, client)
             assert len(heard) == 2, "a recompute that moved nothing pushes nothing"
 
 
-async def test_steady_flapping_is_announced_within_the_cap(monkeypatch, small_debounce):
-    """A change every 50 ms never leaves a quiet period of 100 ms. The 500 ms cap still
-    announces while the flapping goes on."""
+class _ManualTimer:
+    def __init__(self, when, callback):
+        self.when, self.callback, self.cancelled = when, callback, False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class _ManualLoop:
+    """The two things a binding asks of its loop, `time()` and `call_later()`, under the
+    test's control: time moves only through advance_to(), which fires every timer that has
+    come due, in order, as the real loop would."""
+
+    def __init__(self):
+        self.now, self.timers = 0.0, []
+
+    def time(self):
+        return self.now
+
+    def call_later(self, delay, callback):
+        timer = _ManualTimer(self.now + delay, callback)
+        self.timers.append(timer)
+        return timer
+
+    def advance_to(self, when):
+        while True:
+            due = [t for t in self.timers if not t.cancelled and t.when <= when]
+            if not due:
+                break
+            timer = min(due, key=lambda t: t.when)
+            self.timers.remove(timer)
+            self.now = timer.when
+            timer.callback()
+        self.now = when
+
+
+class _ManualGroup:
+    """The binding's task group: start_soon() only queues, drain() runs what was queued."""
+
+    def __init__(self):
+        self.queued = []
+
+    def start_soon(self, fn):
+        self.queued.append(fn)
+
+    async def drain(self):
+        while self.queued:
+            await self.queued.pop(0)()
+
+
+async def test_changes_spread_over_time_are_one_announcement_and_a_later_one_is_another(
+        monkeypatch):
+    """The debounce as wired into the binding, on a clock the test moves by hand: three
+    changes 0.2 s apart, each inside the 0.3 s quiet period of the one before, give ONE
+    announcement, due a quiet period after the LAST change; a change after that gives a
+    second. No wall clock is read, so a slow box cannot split or merge the pushes. (The
+    pure gate arithmetic is pinned in test_list_changed_policy; this is the glue that
+    arms, re-arms and cancels the timer and calls the gate.)"""
+    monkeypatch.setattr(list_changed_policy, "QUIET_SECONDS", 0.3)
+    monkeypatch.setattr(list_changed_policy, "MAX_WAIT_SECONDS", 3.0)
+    loop, group, announced = _ManualLoop(), _ManualGroup(), []
+    binding = list_changed._Binding(SimpleNamespace(), loop, threading.current_thread(), group)
+
+    async def announce():
+        announced.append(loop.now)
+    binding._announce = announce
+
+    async def advance_to(when):
+        loop.advance_to(when)
+        await group.drain()
+
+    binding.on_change("a")
+    await advance_to(0.2)
+    binding.on_change("b")
+    await advance_to(0.4)
+    binding.on_change("c")
+    await advance_to(0.69)
+    assert announced == [], "announced inside the quiet period that the last change restarted"
+    await advance_to(0.7)
+    assert announced == [pytest.approx(0.7)], announced
+
+    await advance_to(2.0)
+    assert len(announced) == 1, "a timer fired with nothing armed"
+    binding.on_change("d")
+    await advance_to(2.29)
+    assert len(announced) == 1
+    await advance_to(2.3)
+    assert announced == [pytest.approx(0.7), pytest.approx(2.3)], announced
+
+    # A due timer that finds nothing armed (one that outlived the change it was set for)
+    # pushes nothing.
+    binding._due()
+    await group.drain()
+    assert len(announced) == 2, "a due timer with nothing armed pushed a notification"
+
+
+async def test_steady_flapping_is_announced_within_the_cap(monkeypatch):
+    """A change every few milliseconds never leaves a quiet period. The cap still announces
+    while the flapping goes on, and a push covers many changes.
+
+    The quiet period is set so long that it cannot elapse however the flapping thread is
+    scheduled, which makes every announcement below the cap's. The test does not measure the
+    gaps between changes or the time to the first push: both depend on how long a thread
+    gets to run, and the claim does not."""
+    monkeypatch.setattr(list_changed_policy, "QUIET_SECONDS", 3600.0)
+    monkeypatch.setattr(list_changed_policy, "MAX_WAIT_SECONDS", 0.2)
     tools, roster = _server().mcp_tools, Roster(monkeypatch)
     heard = Heard()
+    stop = threading.Event()
+    changes = []
 
-    def pause(seconds):
-        # Not time.sleep: on a macOS box that runs with no foreground app, sleep(0.05)
-        # returns after 55-200 ms (timer coalescing), which is longer than the quiet period,
-        # so every change would be announced on its own and the cap would never come into play.
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
-            time.sleep(0)
-
-    changes = []   # when each change was made, so the real gap between two can be measured
-
-    def flap(until):
+    def flap():
         i = 0
-        while time.monotonic() < until:
-            changes.append(time.monotonic())
+        while not stop.is_set():
+            changes.append(i)
             reshape(tools, roster, f"flap {i}")
             i += 1
-            pause(0.05)
+            stop.wait(0.01)
 
     async with tools.mcp.list_changed.running():
         async with Client(tools.mcp, mode="legacy", message_handler=heard):
-            started = time.monotonic()
-            await asyncio.to_thread(flap, started + 1.5)
-            stopped = time.monotonic()
-            await asyncio.sleep(0.6)
-    # From one change to the next, reshape() itself included: that is the quiet time the
-    # debounce sees, and timing pause() alone would miss a slow reshape.
-    longest = max(later - earlier for earlier, later in zip(changes, changes[1:]))
-    assert longest < list_changed_policy.QUIET_SECONDS, (
-        f"{longest:.3f} s passed between two changes, so the quiet period elapsed and the "
-        "premise of this test (it never does) did not hold")
-    during = [t for t in heard.at if t < stopped]
-    assert during, "the cap must announce before the flapping stops"
-    assert during[0] - started < 1.0
-    assert len(heard) <= 5
+            flapper = asyncio.create_task(asyncio.to_thread(flap))
+            try:
+                await wait_until(lambda: len(heard) >= 3,
+                                 "three announcements while the flapping goes on", timeout=30)
+                pushes, made = len(heard), len(changes)
+            finally:
+                stop.set()
+                await flapper
+    assert made > pushes, f"{made} changes made {pushes} pushes: the cap must coalesce them"
 
 
 async def test_nothing_is_pushed_while_no_transport_is_bound(monkeypatch):
@@ -481,15 +590,14 @@ async def test_a_change_during_a_broadcast_is_announced_after_it(fast_debounce):
         _note(notifier, slow=Slow())
         surface["v"] = "b"
         notifier.surface_changed()
-        await wait_until(lambda: pushes == ["b"], "the first push in flight", timeout=3)
+        await wait_until(lambda: pushes == ["b"], "the first push in flight")
         surface["v"] = "c"
         notifier.surface_changed()
-        await wait_until(lambda: binding._again, "the second deadline during the push",
-                         timeout=3)
+        await wait_until(lambda: binding._again, "the second deadline during the push")
         assert pushes == ["b"], "no second broadcast runs beside the first"
         release.set()
-        await wait_until(lambda: pushes == ["b", "c"], "the second push", timeout=3)
-        await wait_until(lambda: not binding._broadcasting, "the broadcast to end", timeout=3)
+        await wait_until(lambda: pushes == ["b", "c"], "the second push")
+        await wait_until(lambda: not binding._broadcasting, "the broadcast to end")
         await asyncio.sleep(0.3)
     assert pushes == ["b", "c"]
 
@@ -513,12 +621,11 @@ async def test_a_session_that_stopped_reading_neither_holds_back_the_others_nor_
         for value in ("b", "c"):
             surface["v"] = value
             notifier.surface_changed()
-            await wait_until(lambda: got and got[-1] == value, f"the push of {value}",
-                             timeout=3)
+            await wait_until(lambda: got and got[-1] == value, f"the push of {value}")
             # The stuck session times out (0.3 s), which ends the broadcast; only then can
             # the next change be announced.
             await wait_until(lambda: not binding._broadcasting,
-                             "the stuck push to time out", timeout=3)
+                             "the stuck push to time out")
     assert got == ["b", "c"]
 
 
@@ -547,10 +654,8 @@ async def test_a_session_whose_push_raises_is_skipped_and_the_notifier_stays_up(
         for value in ("b", "c"):
             surface["v"] = value
             notifier.surface_changed()
-            await wait_until(lambda: got and got[-1] == value, f"the push of {value}",
-                             timeout=3)
-            await wait_until(lambda: not binding._broadcasting, "the broadcast to end",
-                             timeout=3)
+            await wait_until(lambda: got and got[-1] == value, f"the push of {value}")
+            await wait_until(lambda: not binding._broadcasting, "the broadcast to end")
     assert got == ["b", "c"]
     assert len(published) == 2, "the listen streams are told even when a push failed"
 
@@ -591,15 +696,12 @@ async def test_a_broadcast_that_raises_is_contained_and_the_next_one_runs(
             _note(notifier, bomb=Bomb(), good=Good())
             surface["v"] = "b"
             notifier.surface_changed()
-            await wait_until(lambda: "broadcast failed" in caplog.text, "the failure logged",
-                             timeout=3)
-            await wait_until(lambda: not binding._broadcasting, "the broadcast to end",
-                             timeout=3)
+            await wait_until(lambda: "broadcast failed" in caplog.text, "the failure logged")
+            await wait_until(lambda: not binding._broadcasting, "the broadcast to end")
             notifier.book.forget("bomb")
             surface["v"] = "c"
             notifier.surface_changed()
-            await wait_until(lambda: got and got[-1] == "c", "the next change announced",
-                             timeout=3)
+            await wait_until(lambda: got and got[-1] == "c", "the next change announced")
 
 
 async def test_a_failing_broadcast_leaves_the_http_side_serving(
@@ -622,7 +724,7 @@ async def test_a_failing_broadcast_leaves_the_http_side_serving(
                 tools.mcp.list_changed.book.note("bomb", Bomb(), binding.loop)
                 await asyncio.to_thread(reshape, tools, roster, "two browsers")
                 await wait_until(lambda: "broadcast failed" in caplog.text,
-                                 "the failure logged", timeout=3)
+                                 "the failure logged")
                 for mode in ("auto", "legacy"):
                     async with http_client() as fresh:
                         async with Client(streamable_http_client(live.url, http_client=fresh),
@@ -632,8 +734,7 @@ async def test_a_failing_broadcast_leaves_the_http_side_serving(
                 tools.mcp.list_changed.forget("bomb")
                 before = len(heard)
                 await asyncio.to_thread(reshape, tools, roster, None)
-                await wait_until(lambda: len(heard) > before, "the next change heard",
-                                 timeout=3)
+                await wait_until(lambda: len(heard) > before, "the next change heard")
 
 
 # =============================================================================
@@ -654,7 +755,7 @@ async def test_a_modern_client_hears_changes_on_listen(monkeypatch):
 
                 reader = asyncio.create_task(consume())
                 await asyncio.to_thread(reshape, tools, roster, "two")
-                await wait_until(lambda: events, "a ToolsListChanged event", timeout=3)
+                await wait_until(lambda: events, "a ToolsListChanged event")
                 await asyncio.sleep(0.5)
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
@@ -678,7 +779,7 @@ async def test_close_streams_ends_an_open_listen_stream_from_any_thread():
                 await asyncio.sleep(0.1)
                 assert not ended, "the stream must stay open until it is closed"
                 await asyncio.to_thread(notifier.close_streams)
-                await wait_until(lambda: ended, "the listen stream to end", timeout=3)
+                await wait_until(lambda: ended, "the listen stream to end")
                 await reader
 
 
@@ -699,7 +800,7 @@ async def test_a_listen_opened_after_close_streams_is_refused_not_held():
                 reader = asyncio.create_task(drain())
                 await asyncio.to_thread(list_changed.close_streams,
                                           loop_thread)
-                await asyncio.wait_for(reader, 3)
+                await asyncio.wait_for(reader, 10)
             with pytest.raises(MCPError) as refused:
                 async with asyncio.timeout(3):
                     async with client.listen(tools_list_changed=True):
@@ -770,7 +871,7 @@ async def test_run_stdio_pushes_to_a_handshake_client_and_forgets_it_at_eof(monk
             assert names(await client.list_tools()) == NINE
             assert tools.mcp.list_changed.session_count() == 1
             await asyncio.to_thread(reshape, tools, roster, "two")
-            await wait_until(lambda: len(heard) >= 1, "the push on the pipe", timeout=3)
+            await wait_until(lambda: len(heard) >= 1, "the push on the pipe")
             assert names(await client.list_tools()) == NINE + ["browsers"]
     assert len(heard) == 1
     assert tools.mcp.list_changed.session_count() == 0
@@ -789,7 +890,7 @@ async def test_run_stdio_serves_listen_to_a_modern_client(monkeypatch):
 
                 reader = asyncio.create_task(consume())
                 await asyncio.to_thread(reshape, tools, roster, "two")
-                await wait_until(lambda: events, "a ToolsListChanged event", timeout=3)
+                await wait_until(lambda: events, "a ToolsListChanged event")
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
     assert events == [ToolsListChanged()]
@@ -812,6 +913,11 @@ def _lifecycle(http_app, mcp_port):
 
 
 LISTEN_ID = "listen-1"
+
+# A stop that cannot end its listen stream sits out the whole 5 s join in stop_mcp_server
+# (lifecycle.py, mcp_thread.join(timeout=5.0)); a working one takes milliseconds. The bound
+# sits a full second under the failure, so a starved runner has seconds of slack.
+STOP_BOUND_SECONDS = 4.0
 
 
 def _listen_request():
@@ -892,7 +998,7 @@ async def test_a_stop_with_a_listen_stream_open_ends_it_and_returns_promptly():
     messages, _refusals, took, joined = await _stop_with_listen_open(relisten=False)
     assert messages[0]["method"] == "notifications/subscriptions/acknowledged", messages
     assert messages[-1]["id"] == LISTEN_ID and "result" in messages[-1], messages
-    assert took < 2.0, f"the stop took {took:.2f}s"
+    assert took < STOP_BOUND_SECONDS, f"the stop took {took:.2f}s"
     assert joined, "uvicorn's thread was still running when the stop returned"
 
 
@@ -901,7 +1007,7 @@ async def test_a_client_that_re_listens_at_once_does_not_hold_the_stop():
     uvicorn still serves requests until its next tick after should_exit, so a listen
     opened in that window must be refused, not held for the whole join."""
     _messages, refusals, took, joined = await _stop_with_listen_open(relisten=True)
-    assert took < 2.0, f"the stop took {took:.2f}s; a late listen was held"
+    assert took < STOP_BOUND_SECONDS, f"the stop took {took:.2f}s; a late listen was held"
     assert joined, "uvicorn's thread was still running when the stop returned"
     # Whether a listen got in before uvicorn closed its listener depends on timing; one
     # that did was refused for the right reason.

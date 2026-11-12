@@ -25,6 +25,12 @@ from server.server import BrowserPlugServer
 from browserplug_shared.version import HEALTH_IDENTITY_HEADER
 
 SCAN_SECONDS = 0.3
+# The stall tests make the blocking work long and bound the loop's worst gap at a fraction
+# of it. Work that ran on the loop would stall it for the whole 2 s and fail the 1 s bound by
+# a wide margin, while scheduler noise on a loaded 3-vCPU VM (tens to a few hundred ms)
+# cannot reach it. The scan counters use the shorter SCAN_SECONDS.
+BLOCKING_WORK_SECONDS = 2.0
+MAX_LOOP_GAP_SECONDS = 1.0
 Conn = collections.namedtuple("Conn", "laddr raddr pid status")
 Addr = collections.namedtuple("Addr", "ip port")
 
@@ -109,6 +115,7 @@ def test_one_health_report_runs_one_table_scan(server, table):
 
 @pytest.mark.asyncio
 async def test_health_request_does_not_stall_the_loop(server, table):
+    table.delay = BLOCKING_WORK_SECONDS
     ticker = Ticker()
     ticker.start()
     await asyncio.sleep(0.05)
@@ -116,7 +123,7 @@ async def test_health_request_does_not_stall_the_loop(server, table):
     await ticker.stop()
     assert body["service"] == "browserplug"
     assert table.calls >= 1
-    assert ticker.max_gap < SCAN_SECONDS / 2, (
+    assert ticker.max_gap < MAX_LOOP_GAP_SECONDS, (
         f"the event loop was blocked for {ticker.max_gap:.2f}s while /health scanned")
 
 
@@ -171,7 +178,7 @@ async def test_get_connections_does_not_stall_the_ws_loop(server):
     ticker = Ticker()
 
     def slow_connections(kilo_details=True, viewer_host=None):
-        time.sleep(SCAN_SECONDS)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return {"connections": [], "count": 0}
 
     server.ws_rpc._h = dataclasses.replace(server.ws_rpc._h, connections_info=slow_connections,
@@ -180,7 +187,7 @@ async def test_get_connections_does_not_stall_the_ws_loop(server):
     await asyncio.sleep(0.05)
     await server.ws_rpc._action_get_connections({"data": {}}, None, "m1")
     await ticker.stop()
-    assert ticker.max_gap < SCAN_SECONDS / 2, (
+    assert ticker.max_gap < MAX_LOOP_GAP_SECONDS, (
         f"the WebSocket loop was blocked for {ticker.max_gap:.2f}s building the report")
 
 
@@ -197,7 +204,7 @@ async def test_websocket_connect_does_not_stall_the_loop(server):
     sock.__aiter__ = lambda *a: empty()
 
     def slow_probe(websocket):
-        time.sleep(SCAN_SECONDS)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return {}
 
     ticker = Ticker()
@@ -207,7 +214,7 @@ async def test_websocket_connect_does_not_stall_the_loop(server):
          patch.object(server, "_notify_connection_waiters"):
         await server.handle_extension_connection(sock)
     await ticker.stop()
-    assert ticker.max_gap < SCAN_SECONDS / 2, (
+    assert ticker.max_gap < MAX_LOOP_GAP_SECONDS, (
         f"the WebSocket loop was blocked for {ticker.max_gap:.2f}s at connect")
 
 

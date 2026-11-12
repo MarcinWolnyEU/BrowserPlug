@@ -12,12 +12,15 @@ serve() arguments and the thing to prove is that the glue passes them.
 import asyncio
 import json
 import socket
+import struct
 
 import pytest
 import websockets
 
 from secure_ext import SecureClient, device_token
 from server.server import BrowserPlugServer
+from server.ws import ws_limits
+from wait_helper import wait_until_async
 
 MIB = 1024 * 1024
 
@@ -28,15 +31,6 @@ def _free_port():
         return s.getsockname()[1]
 
 
-async def _wait_until(predicate, what, timeout=8.0):
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while not predicate():
-        if loop.time() >= deadline:
-            raise AssertionError(f"timed out after {timeout}s waiting until {what}")
-        await asyncio.sleep(0.02)
-
-
 class _Running:
     """A real server on a free port; `strict` makes even loopback peers authenticate."""
 
@@ -45,13 +39,17 @@ class _Running:
         self.server = BrowserPlugServer(host="localhost", port=self.port, start_mcp=False)
         if strict:
             self.server.ws_token_explicit = True
+        # The hello window (15 s by default, read live) must sit far above every wait in this
+        # file. A positive wait is allowed to last DEFAULT_TIMEOUT, and a hello-timeout close
+        # (4401) landing inside it would look like a refusal the cap never made.
+        self.server.ws_auth_timeout = 60.0
         self.task = None
         self.url = f"ws://127.0.0.1:{self.port}"
 
     async def __aenter__(self):
         self.task = asyncio.create_task(self.server.start_server())
-        await _wait_until(lambda: self.server.lifecycle.websocket_server is not None,
-                          "the listener is up")
+        await wait_until_async(lambda: self.server.lifecycle.websocket_server is not None,
+                               "the listener is up")
         return self
 
     async def __aexit__(self, *exc):
@@ -64,20 +62,21 @@ class _Running:
             pass
 
 
-async def _close_after_the_server_hung_up(sock):
-    """Close a client socket the server has already closed on us.
+async def _declare_a_frame_over_the_limit(sock):
+    """Send only the header of a binary frame whose declared size is just over the
+    post-auth limit.
 
-    The server stops reading after the 1009 close, so the client may still hold an unsent
-    tail in its write buffer. CPython's selector transport then finishes closing without
-    counting the loss, and websockets' close() calls transport.abort() on it, which
-    dereferences the cleared loop (AttributeError ... 'call_soon'). The Proactor loop
-    (Windows) has no such path. The socket is gone either way, so only that error is
-    ignored."""
-    try:
-        await sock.close()
-    except AttributeError as e:
-        if "call_soon" not in str(e):
-            raise
+    The server refuses on the header (websockets checks the declared length before it
+    reads a payload byte), so sending the payload proves nothing more. It would also leave
+    a multi-MiB tail in the client's write buffer once the server stops reading after the
+    1009 close, and closing a socket in that state raises inside websockets on a selector
+    loop (macOS, Linux): the transport finishes closing without counting the loss and
+    abort() then dereferences the cleared loop. With the header alone nothing is left
+    unsent, so the socket closes the ordinary way."""
+    length = ws_limits.POST_AUTH_MAX_MESSAGE_BYTES + 1024
+    mask = bytes(4)
+    # FIN + binary opcode; MASK bit + the 8-byte length marker (127); client frames are masked.
+    sock.transport.write(struct.pack("!BBQ", 0x82, 0x80 | 127, length) + mask)
 
 
 def _hello(instance_id="ff-a"):
@@ -96,9 +95,9 @@ async def test_an_authenticated_reply_over_one_mib_does_not_kill_the_connection(
         run.server.handle_extension_message = record
         async with websockets.connect(run.url, max_size=None) as sock:
             client = await SecureClient.connect(sock, device_token(run.server), _hello())
-            await _wait_until(lambda: len(seen) >= 1, "the hello was handled")
+            await wait_until_async(lambda: len(seen) >= 1, "the hello was handled")
             await client.send({"type": "response", "id": "x", "data": "A" * (2 * MIB)})
-            await _wait_until(lambda: len(seen) >= 2, "the 2 MB reply was handled")
+            await wait_until_async(lambda: len(seen) >= 2, "the 2 MB reply was handled")
             assert sock.close_code is None, "the socket must still be open"
             assert seen[-1] > 2 * MIB
 
@@ -110,7 +109,7 @@ async def test_an_unauthenticated_frame_of_200_kib_is_refused_not_buffered():
         async with websockets.connect(run.url, max_size=None) as sock:
             await sock.send("x" * (200 * 1024))
             with pytest.raises(websockets.exceptions.ConnectionClosed) as closed:
-                await asyncio.wait_for(sock.recv(), timeout=5)
+                await asyncio.wait_for(sock.recv(), timeout=15)
         assert closed.value.rcvd.code == 1009
 
 
@@ -119,15 +118,27 @@ async def test_only_a_bounded_number_of_silent_sockets_are_held_open():
     """S9: sockets that never send a hello are capped per peer and in total."""
     async with _Running(strict=True) as run:
         socks = []
+        cap = ws_limits.MAX_PREAUTH_PER_PEER
+
+        def refused():
+            return [s for s in socks if s.close_code is not None or s.state.name != "OPEN"]
+
+        def refused_by_the_cap():
+            return [s for s in socks if s.close_code == 1013]
+
         try:
             for _ in range(40):
                 socks.append(await websockets.connect(run.url))
-            await asyncio.sleep(0.5)
-            refused = [s for s in socks if s.close_code is not None or s.state.name != "OPEN"]
-            open_ = len(socks) - len(refused)
-            assert open_ <= 8, f"{open_} unauthenticated sockets held open"
-            codes = {s.close_code for s in refused if s.close_code is not None}
-            assert 1013 in codes, codes
+            # The server decides after the handshake, so a socket is refused some time after
+            # connect() returned. Wait for the cap's own refusals (1013, "try again later");
+            # any other close (a hello timeout, a protocol error) is not the cap working.
+            await wait_until_async(lambda: len(refused_by_the_cap()) >= len(socks) - cap,
+                                   f"the cap refused all but {cap} of {len(socks)} silent sockets")
+            open_ = len(socks) - len(refused())
+            assert open_ <= cap, f"{open_} unauthenticated sockets held open"
+            assert run.server.preauth_gate.held() <= cap
+            codes = {s.close_code for s in refused() if s.close_code is not None}
+            assert codes == {1013}, codes
         finally:
             await asyncio.gather(*(s.close() for s in socks), return_exceptions=True)
 
@@ -135,14 +146,30 @@ async def test_only_a_bounded_number_of_silent_sockets_are_held_open():
 @pytest.mark.asyncio
 async def test_a_slot_frees_when_an_unauthenticated_socket_leaves():
     async with _Running(strict=True) as run:
+        gate, released = run.server.preauth_gate, []
+        release = gate.release
+
+        def counted_release(peer):
+            release(peer)
+            released.append(peer)
+        gate.release = counted_release
+        connected = 0
         for _ in range(3):  # far more than the cap over time, never at once
             for _ in range(8):
                 s = await websockets.connect(run.url)
                 await s.close()
+                connected += 1
+            # The server releases a slot in its handler, after the client's close() has
+            # returned, and a handler that has not run yet holds none. Wait until every
+            # socket opened so far has been through the gate and out again, or the next
+            # ones can meet a full gate.
+            await wait_until_async(lambda: len(released) == connected,
+                                   f"every one of the {connected} slots is released")
+        assert gate.held() == 0
         async with websockets.connect(run.url) as sock:
             await sock.send(json.dumps(_hello()))
             with pytest.raises(websockets.exceptions.ConnectionClosed) as closed:
-                await asyncio.wait_for(sock.recv(), timeout=5)
+                await asyncio.wait_for(sock.recv(), timeout=15)
         assert closed.value.rcvd.code == 4401, "a normal rejection, not the capacity refusal"
 
 
@@ -150,18 +177,17 @@ async def test_a_slot_frees_when_an_unauthenticated_socket_leaves():
 async def test_an_oversize_close_tells_the_waiting_caller_why():
     """The 1009 close must fail the in-flight request with a readable reason."""
     async with _Running(strict=True) as run:
-        from server.ws import ws_limits
         sock = await websockets.connect(run.url, max_size=None)
         try:
             await SecureClient.connect(sock, device_token(run.server), _hello("ff-big"))
-            await _wait_until(lambda: "ff-big" in run.server.browsers, "the browser registered")
+            await wait_until_async(lambda: "ff-big" in run.server.browsers, "the browser registered")
             fut = asyncio.get_event_loop().create_future()
             run.server.rpc.pending_requests["rid-1"] = fut
             run.server.rpc.pending_owners["rid-1"] = "ff-big"
-            await sock.send(b"\x00" * (ws_limits.POST_AUTH_MAX_MESSAGE_BYTES + 1024))
-            result = await asyncio.wait_for(fut, timeout=8)
+            await _declare_a_frame_over_the_limit(sock)
+            result = await asyncio.wait_for(fut, timeout=15)
         finally:
-            await _close_after_the_server_hung_up(sock)
+            await sock.close()
         message = result["error"]
         assert "too large" in message and "MiB" in message, message
         assert "closed, restarted" not in message, "not the generic disconnect text"

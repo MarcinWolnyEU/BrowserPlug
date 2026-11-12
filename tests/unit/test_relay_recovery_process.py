@@ -21,6 +21,7 @@ import psutil
 
 import test_imports  # noqa: F401
 from browserplug_shared.mcp_port import MCP_PORT_ENV
+from wait_helper import wait_until
 
 from test_server_process_lifecycle import ROOT, SERVER_SCRIPT, Sandbox, sandbox  # noqa: F401
 
@@ -118,10 +119,8 @@ def kill_server(box):
         except psutil.Error:
             pass
     psutil.wait_procs(victims, timeout=10)
-    deadline = time.monotonic() + 10
-    while box.health(timeout=0.5) is not None:
-        assert time.monotonic() < deadline, "the killed server still answers"
-        time.sleep(0.1)
+    wait_until(lambda: box.health(timeout=0.5) is None, "the killed server stopped answering",
+               interval=0.1)
     box.seen_pids.clear()
     return pid
 

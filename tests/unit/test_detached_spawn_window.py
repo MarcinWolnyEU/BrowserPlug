@@ -36,6 +36,7 @@ from launcher import launcher
 from browserplug_shared import server_env
 from browserplug_shared.mcp_port import detached_spawn_kwargs
 from server.server import BrowserPlugServer
+from wait_helper import wait_until
 
 DETACHED_PROCESS = 0x00000008
 SHARED_PY = str(Path(__file__).resolve().parents[2] / "shared-py")
@@ -186,10 +187,9 @@ def test_a_detached_child_survives_its_parent_and_a_plain_one_does_not():
     detached = _spawn_then_kill_the_parents_group("detached")
     plain = _spawn_then_kill_the_parents_group("plain")
     try:
-        deadline = time.monotonic() + 10
-        while _alive(plain) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not _alive(plain), "the control child outlived its group: the kill proves nothing"
+        wait_until(lambda: not _alive(plain),
+                   "the control child died with its group (if it outlives the kill, the kill proves nothing)",
+                   interval=0.05)
         assert _alive(detached), "the detached child died with its parent's group"
     finally:
         for pid in (detached, plain):

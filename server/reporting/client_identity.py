@@ -87,6 +87,13 @@ def _same_directory(cwd, directory):
         os.path.normcase(os.path.abspath(cwd)) == os.path.normcase(directory))
 
 
+def _names_the_project(resolved):
+    """Does a path from _resolve_arg have the project name in it? normcase lower-cases a
+    path on Windows only, so on macOS and Linux a checkout in a `BrowserPlug` directory
+    (the GitHub runner's) has to be compared in lower case here."""
+    return "browserplug" in resolved.replace("\\", "/").lower()
+
+
 def is_proxy_process(proc, child_argv=None):
     """Is this the launcher's proxy transport child (server/proxy/__main__.py)?
 
@@ -120,7 +127,7 @@ def is_proxy_process(proc, child_argv=None):
         resolved = _resolve_arg(cwd, token)
         if resolved is None:
             continue
-        if resolved == PROXY_ENTRY_PATH or "browserplug" in resolved.replace("\\", "/"):
+        if resolved == PROXY_ENTRY_PATH or _names_the_project(resolved):
             return True
     return False
 
@@ -177,7 +184,7 @@ def is_launcher_process(proc, child_argv=None):
         # checkout only when that checkout's directory carries the project name, so a copy
         # cloned as `foxmcp` is missed. It matches the resolved path, never this server's
         # cwd, which is why _resolve_arg refuses a cwd it cannot place.
-        if resolved in (LAUNCHER_PATH, REAL_LAUNCHER_PATH) or "browserplug" in resolved.replace("\\", "/"):
+        if resolved in (LAUNCHER_PATH, REAL_LAUNCHER_PATH) or _names_the_project(resolved):
             return True
     return False
 
@@ -247,7 +254,7 @@ def is_command_flag(shell_name, token):
             and "c" in token)
 
 
-def resolve_client_chain(peer_port):
+def resolve_client_chain(peer_port, on_peer_read=None):
     """(client_pid, launcher_pid) for an HTTP peer port.
 
     When a client connects through the stdio launcher (server/launcher.py),
@@ -272,8 +279,16 @@ def resolve_client_chain(peer_port):
     launcher: the launcher is the first launcher.py hop above them, the process whose
     pid the proxy stamps on its /health poll and /timing reports, so the map's launcher
     node and its version line up.
+
+    The TCP-table read is the one step that needs the peer's connection to be open, and a
+    proxy or relay request is on a connection that closes milliseconds after its response.
+    `on_peer_read`, when given, is called without arguments as soon as that read is over
+    (the peer found or not), before any process is walked, so a caller that is holding the
+    connection open for it can let go.
     """
     pid = pid_for_local_port(peer_port)
+    if on_peer_read is not None:
+        on_peer_read()
     launcher_pid = None
     try:
         import psutil
@@ -563,6 +578,11 @@ def describe_pid(pid):
 # A session whose identity could not be resolved is looked up again on a later request, but
 # not on every request: each attempt walks the TCP table.
 IDENTITY_RETRY_SECONDS = 5.0
+# A lookup that did not find the peer's socket in the table usually read it too late: the
+# connection of a proxy or relay request closes right after its response. The session's next
+# request, which has a connection of its own that is open while it is served, repeats the
+# lookup at once, up to this many times; after that the 5 s cadence above applies.
+IDENTITY_MISS_RETRIES = 3
 
 
 def note_http_client(http_clients, session_id, client, client_pid=None):
@@ -592,6 +612,7 @@ def note_http_client(http_clients, session_id, client, client_pid=None):
         "history": [],
         "identified": False,
         "identity_tried": None,
+        "identity_misses": 0,
     }
     # setdefault is atomic: two first requests of one session can race here (tests and
     # worker threads call this too), and a plain store let the second replace the first
@@ -601,6 +622,8 @@ def note_http_client(http_clients, session_id, client, client_pid=None):
         entry["last_activity"] = now
     if entry.get("identified") or not (client_pid or peer_port):
         return None
+    if entry.get("identity_pending"):
+        return None     # a lookup is still running, or has not finished clearing its flag
     tried = entry.get("identity_tried")
     if tried is not None and time.monotonic() - tried < IDENTITY_RETRY_SECONDS:
         return None
@@ -608,36 +631,53 @@ def note_http_client(http_clients, session_id, client, client_pid=None):
     return entry
 
 
-def identify_http_client(entry, client, client_pid=None):
+def identify_http_client(entry, client, client_pid=None, on_peer_read=None):
     """The slow half of tracking: resolve who is behind `entry` and fill it in.
 
     Blocking (a TCP-table sweep and a process walk), so callers run it on a worker
-    thread. It marks the entry identified only when it found a pid, so a peer that could
-    not be resolved is tried again by a later request (note_http_client throttles that).
+    thread. `on_peer_read` goes to resolve_client_chain, and is called once more when the
+    table read raised, so a caller waiting on it is never left waiting.
+
+    The entry is marked identified when the peer's socket was found in the table. A
+    forwarded client pid names the client without any read, so it does not count: when the
+    peer was not found the entry keeps what the header gave it, stays open, and the
+    session's next request looks again (IDENTITY_MISS_RETRIES). Once those are spent it
+    settles for that pid with no launcher. A lookup that found no pid at all files nothing
+    and is retried by note_http_client's slower cadence.
     """
     peer_port = client[1] if client else None
     # Even with the pid forwarded in the header, the peer chain is what knows whether a
     # launcher sits in between (and which process it is).
-    resolved_pid, launcher_pid = resolve_client_chain(peer_port)
+    try:
+        args = (peer_port,) if on_peer_read is None else (peer_port, on_peer_read)
+        resolved_pid, launcher_pid = resolve_client_chain(*args)
+    finally:
+        if on_peer_read is not None:
+            on_peer_read()
+    peer_found = bool(resolved_pid or launcher_pid)
+    misses = 0 if peer_found else entry.get("identity_misses", 0) + 1
+    entry["identity_misses"] = misses
+    retry = peer_port is not None and 0 < misses <= IDENTITY_MISS_RETRIES
     desc = describe_pid(client_pid or resolved_pid)
     launcher_start = (describe_pid(launcher_pid).get("start_time")
                       if launcher_pid else None)
-    if not desc.get("pid"):
-        return
-    entry.update({
-        "pid": desc["pid"],
-        "friendly": desc.get("friendly"),
-        "exe_path": desc.get("exe_path"),
-        "cmdline": desc.get("cmdline"),
-        "cwd": desc.get("cwd"),
-        "start_time": desc.get("start_time"),
-        "launcher_pid": launcher_pid,
-        # The launcher's OS start time; its map node reports "started" like every other
-        # party on the connection map.
-        "launcher_start_time": launcher_start,
-        "peer_port": peer_port,
-        "identified": True,
-    })
+    if desc.get("pid"):
+        entry.update({
+            "pid": desc["pid"],
+            "friendly": desc.get("friendly"),
+            "exe_path": desc.get("exe_path"),
+            "cmdline": desc.get("cmdline"),
+            "cwd": desc.get("cwd"),
+            "start_time": desc.get("start_time"),
+            "launcher_pid": launcher_pid,
+            # The launcher's OS start time; its map node reports "started" like every other
+            # party on the connection map.
+            "launcher_start_time": launcher_start,
+            "peer_port": peer_port,
+            "identified": not retry,
+        })
+    if retry:
+        entry["identity_tried"] = None    # the session's next request may look again
 
 
 def track_http_client(http_clients, session_id, client, client_pid=None):

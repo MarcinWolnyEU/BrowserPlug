@@ -37,7 +37,6 @@ import socket
 import stat
 import subprocess
 import sys
-import time
 import urllib.request
 from pathlib import Path
 from unittest.mock import patch
@@ -65,6 +64,7 @@ from server.ws.ws_auth import (
 )
 from browserplug_shared.ws_token import perms_are_owner_only
 from token_test_helpers import is_valid_device_token
+from wait_helper import DEFAULT_TIMEOUT, assert_never_within_async, wait_until_async
 from browserplug_shared.config_store import (
     STATE_DIR_ENV,
     config_path,
@@ -164,32 +164,12 @@ def make_bootstrap_server(**kwargs):
     return BrowserPlugServer(host="localhost", port=8772, start_mcp=True, **kwargs)
 
 
-async def wait_until(predicate, what, timeout=2.0, interval=0.01):
-    """Poll `predicate` until it holds — the bounded-poll idiom from
-    test_command_timings.py.
-
-    Used wherever a fixed sleep was really waiting for an async step to LAND (a hello
-    being authenticated and registered, the identity probe firing). A fixed sleep bets
-    the step finishes inside N ms; on a loaded box it loses and the assertion below
-    misreports a half-finished handshake as a rejected one. This exits as soon as the
-    condition holds and fails naming what never happened.
-
-    NOT used where the point is that nothing happens (an unauthenticated peer must get no
-    answer): a negative has no edge to poll for, so those keep their settle window.
-    """
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out after {timeout}s waiting until {what}")
-        await asyncio.sleep(interval)
-
-
-async def registered(server, instance_id, timeout=2.0):
+async def registered(server, instance_id, timeout=DEFAULT_TIMEOUT):
     """Wait for `instance_id` to appear in the registry — what a hello that passes
     authentication is FOR. Also satisfied by a rejection, which never registers: those
     tests await the handler task instead (it returns when the socket is closed)."""
-    await wait_until(lambda: instance_id in server.browsers,
-                     f"the hello registered browser {instance_id!r}", timeout=timeout)
+    await wait_until_async(lambda: instance_id in server.browsers,
+                           f"the hello registered browser {instance_id!r}", timeout=timeout)
 
 
 async def connect(server, ws):
@@ -197,13 +177,13 @@ async def connect(server, ws):
         task = asyncio.create_task(server.handle_extension_connection(ws))
         # The peer probe runs on an executor (finding C7): registration takes a thread hop.
         # Only a socket that registers on connect (AUTH_OFF) is waited for; the others
-        # authenticate first and register later.
-        await asyncio.sleep(0.01)
-        if server.ws_auth.auth_mode(peer_local=True) == AUTH_OFF:
-            for _ in range(400):
-                if server.registry.browser_for_ws(ws) is not None or task.done():
-                    break
-                await asyncio.sleep(0.005)
+        # authenticate first and register later, and need no head start: FakeWS queues
+        # whatever the test feeds before the handler reads it.
+        peer_local = ws.remote_address[0] in ("127.0.0.1", "::1", "localhost")
+        if server.ws_auth.auth_mode(peer_local=peer_local) == AUTH_OFF:
+            await wait_until_async(
+                lambda: server.registry.browser_for_ws(ws) is not None or task.done(),
+                "the AUTH_OFF socket was registered (or its handler returned)")
     return task
 
 
@@ -251,7 +231,7 @@ async def test_no_token_configured_and_no_bootstrap_channel_is_todays_behavior(m
     assert list(server.browsers) == ["ff-a"]
     assert ws.close_code is None
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -267,7 +247,7 @@ async def test_a_remote_peer_is_never_degraded(monkeypatch):
     ws = FakeWS(peer=("192.168.1.50", 51000))
     task = await connect(server, ws)
     ws.feed(hello_frame(instance_id="ff-remote"))          # no token
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == WS_CLOSE_UNAUTHORIZED
@@ -279,7 +259,7 @@ async def test_a_remote_peer_is_never_degraded(monkeypatch):
     await registered(server, "ff-remote")
     assert list(server.browsers) == ["ff-remote"]
     ws2.drop()
-    await asyncio.wait_for(task2, timeout=2.0)
+    await asyncio.wait_for(task2, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -298,7 +278,7 @@ async def test_no_token_configured_tolerates_a_hello_that_carries_one(monkeypatc
     assert not any("token" in str(v).lower() for v in vars(browser).values()
                    if isinstance(v, dict))
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 # --- token auth: accept / reject / missing / timeout --------------------------------
@@ -321,7 +301,7 @@ async def test_valid_token_is_accepted_and_registers_the_browser():
     assert server.browsers["ff-a"].encrypted
     assert ws.close_code is None
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -331,7 +311,7 @@ async def test_wrong_token_is_rejected_and_never_registered():
 
     task = await connect(server, ws)
     ws.feed(hello_frame(token=mint()))   # a valid-shaped token — just not ours
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}, "an unauthenticated socket must never enter the registry"
     assert ws.close_code == 4401
@@ -346,7 +326,7 @@ async def test_missing_token_is_rejected():
 
     task = await connect(server, ws)
     ws.feed(hello_frame())               # token key absent entirely
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == 4401
@@ -361,7 +341,7 @@ async def test_empty_token_is_rejected():
 
     task = await connect(server, ws)
     ws.feed(hello_frame(token=""))
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == 4401
@@ -375,7 +355,7 @@ async def test_hello_that_never_arrives_times_out_and_closes():
 
     task = await connect(server, ws)
     assert server.browsers == {}
-    await asyncio.wait_for(task, timeout=2.0)   # returns on its own once the window closes
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)   # returns on its own once the window closes
 
     assert server.browsers == {}
     assert ws.close_code == 4401
@@ -389,7 +369,7 @@ async def test_localhost_must_also_present_the_token():
 
     task = await connect(server, ws)
     ws.feed(hello_frame())
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == 4401
@@ -410,14 +390,14 @@ async def test_frames_before_the_hello_are_held_then_replayed():
     # frame that overtakes it inside the channel is held until it lands.
     await secure_fake_hello(ws, server, None)
     ws.feed({"id": "probe-1", "type": "request", "action": "server.health", "data": {}})
-    await asyncio.sleep(0.01)
-    assert ws.sent == [], "a peer that has not said hello gets no answer"
+    await assert_never_within_async(
+        lambda: ws.sent, "a peer that has not said hello was answered", within=0.2)
     assert server.browsers == {}
 
     ws.feed(hello_frame())
     # Registration happens BEFORE the held frames are replayed, so waiting on the replayed
     # answer waits for both — and cannot read a registry that is only half-way there.
-    await wait_until(lambda: any(m.get("id") == "probe-1" for m in ws.sent),
+    await wait_until_async(lambda: any(m.get("id") == "probe-1" for m in ws.sent),
                      "the held probe was replayed and answered")
 
     assert list(server.browsers) == ["ff-a"]
@@ -425,7 +405,7 @@ async def test_frames_before_the_hello_are_held_then_replayed():
     assert len(answers) == 1, "the held probe must be answered once the peer authenticates"
     assert answers[0]["data"]["status"] == "ok"
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -436,7 +416,7 @@ async def test_a_flood_of_pre_auth_frames_is_cut_off():
     task = await connect(server, ws)
     for i in range(WS_PREAUTH_FRAME_LIMIT + 1):
         ws.feed({"id": f"junk-{i}", "type": "request", "action": "server.health", "data": {}})
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.sent == []
@@ -452,7 +432,7 @@ async def test_garbage_before_the_hello_does_not_authenticate():
     task = await connect(server, ws)
     ws.feed_raw("not json at all")
     ws.feed_raw(json.dumps(["a", "list"]))
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == 4401
@@ -608,7 +588,6 @@ async def test_a_remote_peer_skips_the_local_probe_and_is_named_by_its_ip():
 
     with patch.object(server, "_probe_browser_identity") as probe:
         task = asyncio.create_task(server.handle_extension_connection(ws))
-        await asyncio.sleep(0.01)
         await secure_fake_hello(ws, server, hello_frame(
             instance_id="ff-remote", platform={"os": "mac", "arch": "aarch64"}))
         # Wait for the registration that WOULD have probed — asserting "not called" before
@@ -623,7 +602,7 @@ async def test_a_remote_peer_skips_the_local_probe_and_is_named_by_its_ip():
     assert browser.name == "remote-192.168.1.50"
     assert browser.describe() == "Firefox [1] remote-192.168.1.50"
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -636,7 +615,7 @@ async def test_a_local_peer_still_gets_the_identity_probe():
              "friendly": "Firefox Developer Edition", "exe_path": "firefox.exe"}
     with patch.object(server, "_probe_browser_identity", return_value=ident) as probe:
         task = asyncio.create_task(server.handle_extension_connection(ws))
-        await wait_until(lambda: probe.called, "the handler probed the local peer's identity")
+        await wait_until_async(lambda: probe.called, "the handler probed the local peer's identity")
         probe.assert_called_once()
     ws.feed(hello_frame(instance_id="ff-local"))
     await registered(server, "ff-local")
@@ -646,7 +625,7 @@ async def test_a_local_peer_still_gets_the_identity_probe():
     assert browser.browser_pid == 4242
     assert browser.name == "Firefox Developer Edition pid 4242"
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 # --- the token itself: minted once, persisted, stable -------------------------------
@@ -822,7 +801,7 @@ async def test_a_local_extension_without_a_token_is_rejected_TOWARDS_the_endpoin
 
     task = await connect(server, ws)
     ws.feed(hello_frame())                       # new extension, no token yet
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == WS_CLOSE_UNAUTHORIZED
@@ -837,7 +816,7 @@ async def test_a_local_extension_without_a_token_is_rejected_TOWARDS_the_endpoin
     assert list(server.browsers) == ["ff-a"]
     assert ws2.close_code is None
     ws2.drop()
-    await asyncio.wait_for(task2, timeout=2.0)
+    await asyncio.wait_for(task2, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -851,7 +830,7 @@ async def test_an_OLD_local_extension_with_no_token_is_no_longer_let_in(monkeypa
 
     task = await connect(server, ws)
     ws.feed(hello_frame(bootstrap=False))        # an extension built before the feature
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == WS_CLOSE_UNAUTHORIZED
@@ -868,7 +847,7 @@ async def test_the_old_extension_grace_does_NOT_extend_to_remote_peers(monkeypat
 
     task = await connect(server, ws)
     ws.feed(hello_frame(bootstrap=False))        # the same "old extension" hello
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == WS_CLOSE_UNAUTHORIZED
@@ -887,7 +866,7 @@ async def test_the_old_extension_grace_does_NOT_apply_when_a_token_was_configure
 
     task = await connect(server, ws)
     ws.feed(hello_frame(bootstrap=False))
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == WS_CLOSE_UNAUTHORIZED
@@ -903,7 +882,7 @@ async def test_an_old_extension_that_sends_a_WRONG_token_is_still_rejected(monke
 
     task = await connect(server, ws)
     ws.feed(hello_frame(token=mint(), bootstrap=False))
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
     assert server.browsers == {}
     assert ws.close_code == WS_CLOSE_UNAUTHORIZED
@@ -1261,10 +1240,10 @@ async def test_the_endpoint_only_exists_on_the_localhost_bound_http_app(monkeypa
     ws = FakeWS(peer=("192.168.1.50", 51000))
     task = await connect(server, ws)
     ws.feed({"id": "probe", "type": "request", "action": "server.health", "data": {}})
-    await asyncio.sleep(0.01)
-    assert ws.sent == []
+    await assert_never_within_async(
+        lambda: ws.sent, "an unauthenticated peer's frame was answered", within=0.2)
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -1302,7 +1281,7 @@ async def test_end_to_end_bootstrap_over_real_sockets(monkeypatch, tmp_path):
         async with websockets.connect(url) as sock:
             await sock.send(json.dumps(hello_frame()))
             with pytest.raises(websockets.exceptions.ConnectionClosed) as closed:
-                await asyncio.wait_for(sock.recv(), timeout=5.0)
+                await asyncio.wait_for(sock.recv(), timeout=DEFAULT_TIMEOUT)
         assert closed.value.rcvd.code == WS_CLOSE_UNAUTHORIZED
         reason = closed.value.rcvd.reason
         assert server.browsers == {}
@@ -1310,7 +1289,7 @@ async def test_end_to_end_bootstrap_over_real_sockets(monkeypatch, tmp_path):
         # 2. It follows them (extension: parseTokenEndpoint + fetch).
         endpoint = re.search(r"https?://\S+", reason).group(0)
         assert endpoint == f"http://127.0.0.1:{server.mcp_port}{WS_TOKEN_ENDPOINT_PATH}"
-        with urllib.request.urlopen(endpoint, timeout=5) as response:
+        with urllib.request.urlopen(endpoint, timeout=DEFAULT_TIMEOUT) as response:
             token = json.loads(response.read())["token"]
         assert is_valid_device_token(server.ws_token, token), "a device token of this server's"
 
@@ -1319,7 +1298,7 @@ async def test_end_to_end_bootstrap_over_real_sockets(monkeypatch, tmp_path):
             await SecureClient.connect(sock, token, hello_frame())
             # A REAL socket and a real serve loop: how long the hello takes to cross them
             # is not ours to guess, and 0.3s of it was the flakiest bet in this file.
-            await registered(server, "ff-a", timeout=5.0)
+            await registered(server, "ff-a")
             assert list(server.browsers) == ["ff-a"], "the bootstrapped browser is in"
             assert server.browsers["ff-a"].version == "1.4.0"
     finally:

@@ -81,6 +81,11 @@ JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
 JSONRPC_REQUEST_TIMEOUT = -32001   # MCP's RequestTimeout
 
+# A socket timeout set to the time left and the clock that measures the deadline can disagree
+# by a clock tick (15.6 ms on Windows), so a failure this close to the deadline is the
+# deadline. Same value and reason as relay_era._CLOCK_SLACK.
+_CLOCK_SLACK = relay_era._CLOCK_SLACK
+
 # Overall (monotonic) budget per request. REQUEST_TIMEOUT_SECONDS above is a per-READ
 # timeout and sse-starlette pings every 15 s, so on a wedged call it never fires; these
 # are what bound a request. Everything except tools/call (initialize, ping, tools/list)
@@ -431,8 +436,14 @@ class StdioRelay:
         try:
             try:
                 data = response.read()
-            except Exception:
-                if time.monotonic() >= deadline:
+            except Exception as exc:
+                # The cut timer's own flag is the proof: a timer can fire a clock tick before
+                # monotonic() reaches the deadline, so the clock alone mislabels that cut.
+                # Without the flag, only a socket timeout (set to the time left) lands within
+                # a clock tick of the deadline. A reset or truncation just before the deadline
+                # is a real failure and must stay one, so the caller recovers and retries.
+                if cut_done.is_set() or (isinstance(exc, TimeoutError)
+                                         and time.monotonic() >= deadline - _CLOCK_SLACK):
                     raise DeadlineExceeded()
                 raise
             if cut_done.is_set():

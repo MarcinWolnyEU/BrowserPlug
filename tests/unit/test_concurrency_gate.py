@@ -21,6 +21,7 @@ import test_imports  # noqa: F401
 from server.browsers import request_queue
 from server.server import BrowserPlugServer
 from test_browser_registry import FakeWS, connect, hello
+from wait_helper import wait_until_async
 
 
 @pytest.fixture
@@ -108,9 +109,8 @@ async def test_the_gate_is_released_on_every_exit_path(server):
     # request and the wire has no cancel, so the slot is held until the late reply or
     # the grace (2 x the timeout). tests/unit/test_rpc_slot_lifecycle.py pins each release.
     assert (gate.inflight, gate.queued) == (1, 0)
-    deadline = asyncio.get_running_loop().time() + 1.0
-    while gate.inflight and asyncio.get_running_loop().time() < deadline:
-        await asyncio.sleep(0.02)
+    await wait_until_async(lambda: not gate.inflight,
+                           "the grace period for the timed-out request ended")
     assert (gate.inflight, gate.queued) == (0, 0)
 
     # 3. the send itself fails

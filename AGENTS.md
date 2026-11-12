@@ -230,7 +230,7 @@ uv run --script build_xpi.py      # -> dist/firefox/*.xpi and dist/chrome/*.zip
 
 uv run --locked --script tests/run.py -q                # unit + parity, ~9 min (~8 on a Mac)
 uv run --locked --script tests/run.py parity/ -q        # <1 s
-uv run --locked --script tests/run.py --ruff check server launcher shared-py tests   # static gate, enforced by unit/test_static_analysis.py
+uv run --locked --script tests/run.py --ruff check server launcher shared-py tests scripts   # static gate, enforced by unit/test_static_analysis.py
 npm run test:js                                         # ~15 s; npm install once
 
 # INTEGRATION, both engines, ~12 min: 4 parallel workers, then the `timing` tests
@@ -247,6 +247,12 @@ FIREFOX_PATH="/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox
   PYTHONIOENCODING=utf-8 uv run --locked --script tests/run.py --integration
 ```
 
+- Before a push, `uv run --script scripts/ci_local.py --ref HEAD --hammer` runs the CI job for
+  this OS from a fresh clone of the commit a push would send, with the workflow's own tool
+  versions and environment, then repeats the tests the change touches 20 times. One pass cannot
+  catch a flake that fails 1 run in 12, and stress does not raise that rate; repetition does
+  (`testing.md`, "Running a CI job locally"). Without `--ref` it tests the working tree,
+  untracked files included: fine while iterating, and it can pass what CI fails.
 - One integration invocation at a time on a machine, and `timing` tests only on a quiet
   one. Runs share no state or ports, but they share the CPU, and the `timing` tests
   (wall-clock bounds, deliberate races, fixed sleeps) fail under load; the one

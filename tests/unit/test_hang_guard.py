@@ -17,6 +17,7 @@ process table runs on a worker thread.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -34,6 +35,7 @@ from server import preflight
 from server.server import BrowserPlugServer
 from server.tools.server_info import make_server_info_tool
 from test_server_process_lifecycle import Sandbox, ROOT, SERVER_SCRIPT, exit_code
+from wait_helper import wait_until
 
 WATCHDOG_FAST = {
     "BROWSERPLUG_WATCHDOG_TICK": "0.5",
@@ -42,6 +44,24 @@ WATCHDOG_FAST = {
     "BROWSERPLUG_WATCHDOG_GRACE": "4",
     "BROWSERPLUG_WATCHDOG_DEAD_MAN": "120",
 }
+
+# For the tests where the watchdog must do nothing. A trip needs a loop to miss its heartbeat
+# for STALE seconds on BAD_TICKS ticks in a row, so a 2 s STALE lets a 3-vCPU CI runner that
+# starves the healthy server for ~3.5 s restart it, and the test then fails on a machine
+# problem. Only the stale limit is loosened: the 0.5 s tick, the heartbeat rate and the
+# bad-tick count stay tight. The tests that expect a trip keep WATCHDOG_FAST.
+WATCHDOG_FAST_HEALTHY = {**WATCHDOG_FAST, "BROWSERPLUG_WATCHDOG_STALE": "10"}
+
+# How long a test that expects NO trip must watch. A heartbeat that never beats is first seen
+# stale STALE seconds after the watchdog starts and acts on the BAD_TICKS-th tick after that,
+# so the window has to outlast STALE + BAD_TICKS * TICK (11.5 s here), or such a server passes
+# the test only because the test stopped looking first. Three seconds past that is slack for
+# the time the server took to come up.
+HEALTHY_WATCH_SECONDS = (
+    float(WATCHDOG_FAST_HEALTHY["BROWSERPLUG_WATCHDOG_STALE"])
+    + int(WATCHDOG_FAST_HEALTHY["BROWSERPLUG_WATCHDOG_BAD_TICKS"])
+    * float(WATCHDOG_FAST_HEALTHY["BROWSERPLUG_WATCHDOG_TICK"])
+    + 3.0)
 
 
 @pytest.fixture
@@ -62,6 +82,10 @@ def get_json(url, timeout=3.0):
         return json.loads(r.read()), time.monotonic() - start
 
 
+# The slowest answer a healthy loop may give a probe while a hostile client is described.
+MAX_PROBE_SECONDS = 2.0
+
+
 def probe_both(box, timeout=3.0):
     """(seconds for /health on the MCP loop, seconds for /reachable on the WebSocket loop)."""
     _, mcp = get_json(f"http://127.0.0.1:{box.mcp_port}/health?identity=1", timeout)
@@ -77,12 +101,13 @@ def probe_both(box, timeout=3.0):
 # argv is a few long runs of keyword-bearing identifier characters, the shape that took the
 # old pattern minutes (4000 characters: 51 s). Even with each argument cut to 1024 characters
 # first, the old pattern needs about 0.8 s per argument and the description reads about four
-# of them, so a stall of 3 s tells the old pattern from the linear one with a wide margin.
+# of them. Each client takes a session id from argv[2], so several can run at once (see
+# HOSTILE_CLIENTS).
 HOSTILE_CLIENT = textwrap.dedent('''
     import http.client, json, os, sys
     c = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=120)
     c.request("POST", "/mcp", json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
-              {"Content-Type": "application/json", "Mcp-Session-Id": "f" * 32,
+              {"Content-Type": "application/json", "Mcp-Session-Id": sys.argv[2],
                "MCP-Protocol-Version": "2025-06-18",
                "Accept": "application/json, text/event-stream",
                "X-BrowserPlug-Client-Pid": str(os.getpid())})
@@ -100,35 +125,55 @@ def wait_for_websocket_port(box, timeout=20.0):
             return True
         except OSError:
             return False
-    assert wait_until(reachable, timeout, step=0.05), "the WebSocket port never listened"
+    wait_until(reachable, "the WebSocket port listened", timeout, interval=0.05)
+
+
+# Three clients at once: the identity pool has two workers, so the old pattern keeps the GIL
+# busy from two threads and queues a third lookup behind them. Measured with the old backtracking
+# pattern put back (this box, Windows, 8 s of probes every 0.1 s): one client stalled the loops
+# for 1.5 s at worst, two for 3.3 s, three for 5.1 s. The linear pattern: 0.05 s whatever the
+# count. With three, MAX_PROBE_SECONDS sits 40x above a healthy probe and 2.5x below the
+# regression. (The cut regression is also caught directly, on input that is not cut, in
+# test_client_identity.py::test_the_masking_pattern_is_linear_on_input_that_was_not_cut.)
+HOSTILE_CLIENTS = 3
+PROBE_TIMEOUT = 3.0
 
 
 def test_a_client_with_a_hostile_command_line_does_not_stall_either_loop(sandbox):
     sandbox.start()
     sandbox.wait_healthy()
     wait_for_websocket_port(sandbox)
-    client = subprocess.Popen(
-        [sys.executable, "-c", HOSTILE_CLIENT, str(sandbox.mcp_port), *["key" * 1300] * 6],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    clients = [
+        subprocess.Popen(
+            [sys.executable, "-c", HOSTILE_CLIENT, str(sandbox.mcp_port), f"{i:032d}",
+             *["key" * 1300] * 6],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for i in range(HOSTILE_CLIENTS)]
     try:
         worst = 0.0
         deadline = time.monotonic() + 8.0
         polls = 0
         while time.monotonic() < deadline:
-            mcp, ws = probe_both(sandbox)
+            try:
+                mcp, ws = probe_both(sandbox, timeout=PROBE_TIMEOUT)
+            except TimeoutError:
+                mcp = ws = PROBE_TIMEOUT    # a probe the loop never answered: a stall of at least this
             worst = max(worst, mcp, ws)
             polls += 1
             time.sleep(0.1)
-        out, _ = client.communicate(timeout=60)
+        outs = [client.communicate(timeout=60)[0] for client in clients]
     finally:
-        if client.poll() is None:
-            client.kill()
-    assert out.strip().isdigit(), f"the hostile client got no HTTP answer: {out!r}"
+        for client in clients:
+            if client.poll() is None:
+                client.kill()
+    for out in outs:
+        assert out.strip().isdigit(), f"the hostile client got no HTTP answer: {out!r}"
     assert polls >= 20
-    # The old pattern stalled a loop for about 3 s; a busy machine adds a few tens of ms to a
-    # healthy probe (0.5 s was tripped by a parallel test run), so 1 s sits between the two.
-    assert worst < 1.0, (f"a loop stalled for {worst:.1f}s while a client's command line was "
-                         f"being described")
+    # The old pattern stalled a loop for about 5 s (see HOSTILE_CLIENTS); a busy machine adds
+    # a few tens of ms to a healthy probe (0.5 s was tripped by a parallel test run). 2 s sits
+    # well past anything scheduler noise produces and keeps the regression failing.
+    assert worst < MAX_PROBE_SECONDS, (
+        f"a loop stalled for {worst:.1f}s while a client's command line was being described")
 
 
 # --- a loop wedged for good -----------------------------------------------------------
@@ -187,14 +232,13 @@ def hang_log(box):
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
-def wait_until(predicate, timeout, step=0.2):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(step)
-    return None
+@contextlib.contextmanager
+def diagnosed(box):
+    """Append the sandbox's logs to the failure of a wait_until inside the block."""
+    try:
+        yield
+    except AssertionError as e:
+        raise AssertionError(f"{e}\n{box.diagnostics()}") from None
 
 
 def lock_is_free(port):
@@ -223,10 +267,10 @@ def test_a_wedged_websocket_loop_ends_in_a_dump_a_dead_process_and_a_successor(s
     assert "forced exit" in log and "WebSocket loop has not run" in log, log[-3000:]
     assert "wedged_here_in_sleep" in log, "the dump must show where the loop was"
     sandbox.wait_gone(old)
-    new = wait_until(
-        lambda: (sandbox.health(timeout=2.0) or {}).get("server_pid") not in (None, old),
-        timeout=60)
-    assert new, "no successor answered /health\n" + sandbox.diagnostics()
+    with diagnosed(sandbox):
+        wait_until(
+            lambda: (sandbox.health(timeout=2.0) or {}).get("server_pid") not in (None, old),
+            "a successor answered /health", timeout=60, interval=0.2)
     assert "Restart: replacement spawned" in sandbox.log_text()
 
 
@@ -238,9 +282,10 @@ def test_a_wedged_mcp_loop_is_replaced_by_a_restart(sandbox):
     proc = start_wedged(sandbox, "mcp", "io", BROWSERPLUG_WATCHDOG_GRACE="60")
     first = sandbox.wait_healthy()
     old = first["server_pid"]
-    new = wait_until(lambda: (sandbox.health(timeout=2.0) or {}).get("server_pid") not in (None, old),
-                     timeout=60)
-    assert new, "no replacement answered /health\n" + sandbox.diagnostics()
+    with diagnosed(sandbox):
+        wait_until(
+            lambda: (sandbox.health(timeout=2.0) or {}).get("server_pid") not in (None, old),
+            "a replacement answered /health", timeout=60, interval=0.2)
     sandbox.wait_gone(old)
     log = hang_log(sandbox)
     assert "MCP HTTP loop has not run" in log, log[-3000:]
@@ -264,11 +309,12 @@ def test_a_loop_that_holds_the_gil_is_ended_by_the_dead_man_timer(sandbox):
 
 
 def test_a_healthy_server_is_not_touched_by_a_watchdog_with_tight_numbers(sandbox):
-    """The same fast settings on a server nobody wedges: it must still be the same process
-    after the watchdog has had many ticks."""
-    sandbox.start(**WATCHDOG_FAST)
+    """The fast tick and bad-tick numbers on a server nobody wedges (the stale limit is
+    loosened, see WATCHDOG_FAST_HEALTHY): it must still be the same process after the
+    watchdog has had time to act on a heartbeat that never beats."""
+    sandbox.start(**WATCHDOG_FAST_HEALTHY)
     first = sandbox.wait_healthy()
-    time.sleep(8)
+    time.sleep(HEALTHY_WATCH_SECONDS)
     again = sandbox.health()
     assert again and again["server_pid"] == first["server_pid"]
     assert "watchdog: " not in sandbox.log_text()
@@ -292,12 +338,13 @@ def test_a_server_bound_to_ipv6_is_not_restarted_by_its_own_watchdog(sandbox):
     """`--ws-host ::` is supported. The probe only knew 127.0.0.1, failed on every tick, and
     restarted a healthy server every 30 to 35 seconds for ever."""
     from server.runtime import watchdog
-    sandbox.start("--ws-host", "::", **WATCHDOG_FAST)
-    first = wait_until(lambda: health_over_ipv6(sandbox), timeout=60)
-    assert first, "the server never answered on [::1]\n" + sandbox.diagnostics()
+    sandbox.start("--ws-host", "::", **WATCHDOG_FAST_HEALTHY)
+    with diagnosed(sandbox):
+        first = wait_until(lambda: health_over_ipv6(sandbox), "the server answered on [::1]",
+                           timeout=60, interval=0.2)
     assert watchdog.default_probe(sandbox.mcp_port, 3, "::") is True, (
         "the probe must reach a listener bound to ::")
-    time.sleep(8)       # 16 ticks; three failed ones used to be enough
+    time.sleep(HEALTHY_WATCH_SECONDS)       # three failed ticks used to be enough
     again = health_over_ipv6(sandbox)
     assert again and again["server_pid"] == first["server_pid"], sandbox.diagnostics()
     assert "watchdog: " not in sandbox.log_text()
@@ -355,9 +402,10 @@ def test_a_server_that_freezes_thaws_and_freezes_again_is_dumped_and_replaced(sa
     sandbox.procs.append(proc)
     sandbox.seen_pids.add(proc.pid)
     old = sandbox.wait_healthy()["server_pid"]
-    new = wait_until(lambda: (sandbox.health(timeout=2.0) or {}).get("server_pid")
-                     not in (None, old), timeout=90)
-    assert new, "the stuttering server was never replaced\n" + sandbox.diagnostics()
+    with diagnosed(sandbox):
+        wait_until(lambda: (sandbox.health(timeout=2.0) or {}).get("server_pid")
+                   not in (None, old), "the stuttering server was replaced",
+                   timeout=90, interval=0.2)
     sandbox.wait_gone(old)
     log = hang_log(sandbox)
     assert "stalled for about" in log, log[-3000:]
@@ -368,6 +416,15 @@ def test_a_server_that_freezes_thaws_and_freezes_again_is_dumped_and_replaced(sa
 
 
 # --- off the loop: server_info and the doctor --------------------------------------------
+
+# These tests prove that slow work does not run on the event loop. The work blocks for
+# BLOCKING_WORK_SECONDS and the loop's worst gap between 10 ms ticks must stay under
+# MAX_LOOP_GAP_SECONDS. Work run on the loop would stall it for the whole 2 s, so the bound
+# fails a regression by a factor of two; scheduler noise on a loaded 3-vCPU VM runs to
+# tens or a few hundred ms, which cannot reach it.
+BLOCKING_WORK_SECONDS = 2.0
+MAX_LOOP_GAP_SECONDS = 1.0
+
 
 class LoopWatcher:
     """Records the longest gap between 10 ms ticks of the loop it runs on."""
@@ -400,7 +457,7 @@ async def test_server_info_builds_its_report_on_a_worker_thread():
 
     def slow(*args, **kwargs):
         threads.append(threading.current_thread())
-        time.sleep(0.4)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return real(*args, **kwargs)
 
     server.get_connections_info = slow
@@ -412,7 +469,7 @@ async def test_server_info_builds_its_report_on_a_worker_thread():
     await watcher.stop()
     assert "Extension" in text
     assert threads and threads[0] is not threading.main_thread()
-    assert watcher.max_gap < 0.2, f"server_info blocked the loop for {watcher.max_gap:.2f}s"
+    assert watcher.max_gap < MAX_LOOP_GAP_SECONDS, f"server_info blocked the loop for {watcher.max_gap:.2f}s"
 
 
 @pytest.mark.asyncio
@@ -422,7 +479,7 @@ async def test_server_info_runs_its_preflight_checks_on_a_worker_thread(monkeypa
 
     def slow_checks(*args, **kwargs):
         seen.append(threading.current_thread())
-        time.sleep(0.4)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return []
 
     monkeypatch.setattr(preflight, "run_checks", slow_checks)
@@ -433,7 +490,7 @@ async def test_server_info_runs_its_preflight_checks_on_a_worker_thread(monkeypa
     await tool()
     await watcher.stop()
     assert seen and seen[0] is not threading.main_thread()
-    assert watcher.max_gap < 0.2, f"the pre-flight checks blocked the loop for {watcher.max_gap:.2f}s"
+    assert watcher.max_gap < MAX_LOOP_GAP_SECONDS, f"the pre-flight checks blocked the loop for {watcher.max_gap:.2f}s"
 
 
 @pytest.mark.asyncio
@@ -442,7 +499,7 @@ async def test_the_doctor_endpoint_runs_its_checks_off_the_loop(monkeypatch):
 
     def slow_checks(**kwargs):
         seen.append(threading.current_thread())
-        time.sleep(0.4)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return []
 
     monkeypatch.setattr(preflight, "run_checks", slow_checks)
@@ -461,7 +518,7 @@ async def test_the_doctor_endpoint_runs_its_checks_off_the_loop(monkeypatch):
     await watcher.stop()
     assert sent[0]["status"] == 200
     assert seen and seen[0] is not threading.main_thread()
-    assert watcher.max_gap < 0.2, f"/doctor blocked the loop for {watcher.max_gap:.2f}s"
+    assert watcher.max_gap < MAX_LOOP_GAP_SECONDS, f"/doctor blocked the loop for {watcher.max_gap:.2f}s"
 
 
 @pytest.mark.asyncio
@@ -470,7 +527,7 @@ async def test_the_doctor_endpoint_builds_the_health_report_off_the_loop(monkeyp
 
     def slow_health():
         seen.append(threading.current_thread())
-        time.sleep(0.4)
+        time.sleep(BLOCKING_WORK_SECONDS)
         return {"service": "browserplug"}
 
     monkeypatch.setattr(preflight, "run_checks", lambda **kwargs: [])
@@ -489,4 +546,4 @@ async def test_the_doctor_endpoint_builds_the_health_report_off_the_loop(monkeyp
     await watcher.stop()
     assert sent[0]["status"] == 200
     assert seen and seen[0] is not threading.current_thread()
-    assert watcher.max_gap < 0.2, f"/doctor blocked the loop for {watcher.max_gap:.2f}s"
+    assert watcher.max_gap < MAX_LOOP_GAP_SECONDS, f"/doctor blocked the loop for {watcher.max_gap:.2f}s"

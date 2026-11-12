@@ -8,7 +8,6 @@ planted secret never survives.
 """
 
 import json
-import time
 
 from hypothesis import assume, given, strategies as st
 
@@ -112,9 +111,16 @@ def test_sanitized_cmdline_is_total_and_bounded(argv, limit):
 
 @fuzz(max_examples=25)
 @given(st.text(alphabet=st.sampled_from("abcKEY_.-=: 0"), min_size=500, max_size=4000))
-def test_sanitized_cmdline_stays_linear_on_identifier_like_input(text):
-    """Review finding of 2026-10-02: a 4000-character identifier-like argument once took
-    51 s and froze the server. Allow generous slack; a quadratic or cubic pattern is far over."""
-    start = time.perf_counter()
-    client_identity.sanitized_cmdline([text])
-    assert time.perf_counter() - start < 3.0
+def test_sanitized_cmdline_is_total_on_identifier_like_input(text):
+    """Identifier-like input of up to 4000 characters never raises and stays bounded.
+
+    This used to be a timing check (a 4000-character argument took 51 s on 2026-10-02), and
+    it could not catch the regression: sanitized_cmdline cuts each argument to 1024
+    characters before masking, and random text from this alphabet is not the shape that
+    makes the old backtracking pattern slow. With that pattern swapped in, the worst of 25
+    examples still took 6 ms. The timing check lives in test_client_identity.py
+    (test_the_masking_pattern_is_linear_on_input_that_was_not_cut), which times the uncut
+    masking function on hand-built hostile inputs. Fuzzing keeps the totality property.
+    """
+    line = client_identity.sanitized_cmdline([text])
+    assert line is None or (isinstance(line, str) and len(line) <= 501)

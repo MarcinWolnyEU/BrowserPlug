@@ -4,13 +4,12 @@ POST /restart answers the abort only when the verdict arrives within 4 s, and th
 path acks before the verdict. The outcome used to live only in the log.
 """
 
-import time
-
 import pytest
 
 from server.runtime import lifecycle
 from server.runtime.graceful_restart import RestartHooks
 from server.server import BrowserPlugServer
+from wait_helper import wait_until
 
 
 def _server(monkeypatch, spawn):
@@ -58,9 +57,7 @@ def test_a_restart_in_progress_reports_pending(monkeypatch):
         assert last["reason"] is None
     finally:
         release.set()
-        deadline = time.monotonic() + 5
-        while server.lifecycle.restarting and time.monotonic() < deadline:
-            time.sleep(0.01)
+        wait_until(lambda: not server.lifecycle.restarting, "the released restart finished")
 
 
 def test_a_confirmed_restart_reports_ok(monkeypatch):
@@ -72,9 +69,7 @@ def test_a_confirmed_restart_reports_ok(monkeypatch):
 def test_a_refused_second_restart_does_not_overwrite_the_record(monkeypatch):
     server = _server(monkeypatch, _no_spawn)
     server._begin_restart("first").result(5)
-    deadline = time.monotonic() + 3
-    while server.lifecycle.restarting and time.monotonic() < deadline:
-        time.sleep(0.01)
+    wait_until(lambda: not server.lifecycle.restarting, "the first restart finished")
     server.lifecycle.restarting = True
     with pytest.raises(lifecycle.RestartInProgress):
         server._begin_restart("second")

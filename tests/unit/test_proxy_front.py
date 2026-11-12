@@ -42,6 +42,7 @@ from server.proxy import front, policy, side_channel
 from server.proxy.backend import CONNECTION_META_KEYS, BackendUnreachable
 from server.proxy.front import ProxyServer
 from server.tools.tool_renames import RENAMED_TOOLS, renamed_tool_message
+from wait_helper import DEFAULT_TIMEOUT, wait_until_async
 
 # The initialize capabilities the old proxy advertised on stdio, as parsed JSON.
 STDIO_CAPABILITIES = {"logging": {}, "prompts": {"listChanged": False},
@@ -218,7 +219,7 @@ class _Health:
     async def change(self):
         """Move the surface once the watcher holds its baseline (a change before the first
         poll would become the baseline and never be announced)."""
-        await _until(lambda: self.polls >= 1, "the watcher's first /health read")
+        await wait_until_async(lambda: self.polls >= 1, "the watcher's first /health read")
         self.signature += "+"
 
 
@@ -259,7 +260,7 @@ async def _served(monkeypatch, health):
         async with anyio.create_task_group() as group:
             group.start_soon(serve)
             yield pipe()
-            with anyio.fail_after(5):
+            with anyio.fail_after(DEFAULT_TIMEOUT):
                 await returned.wait()
 
 
@@ -279,10 +280,10 @@ async def test_a_2026_client_hears_of_a_tool_change_on_its_listen_stream(monkeyp
             assert client.server_capabilities.tools.list_changed is True
             async with client.listen(tools_list_changed=True) as subscription:
                 await health.change()
-                with anyio.fail_after(5):
+                with anyio.fail_after(DEFAULT_TIMEOUT):
                     assert await subscription.__anext__() == ToolsListChanged()
                 polls = health.polls
-                await _until(lambda: health.polls >= polls + 3, "three more steady polls")
+                await wait_until_async(lambda: health.polls >= polls + 3, "three more steady polls")
                 with anyio.move_on_after(0.05) as quiet:
                     await subscription.__anext__()
                 assert quiet.cancelled_caught, "one change, one event"
@@ -305,9 +306,9 @@ async def test_a_handshake_client_hears_of_a_tool_change_once(monkeypatch):
             assert client.server_capabilities.tools.list_changed is True
             await client.list_tools()           # a message fills the watcher's holder
             await health.change()
-            await _until(lambda: pushed, "the push")
+            await wait_until_async(lambda: pushed, "the push")
             polls = health.polls
-            await _until(lambda: health.polls >= polls + 3, "three more steady polls")
+            await wait_until_async(lambda: health.polls >= polls + 3, "three more steady polls")
     assert len(pushed) == 1
 
 
@@ -322,7 +323,7 @@ async def test_a_setting_that_serves_2026_07_28_serves_it_with_list_changed(monk
             assert client.protocol_version == "2026-07-28"
             async with client.listen(tools_list_changed=True) as subscription:
                 await health.change()
-                with anyio.fail_after(5):
+                with anyio.fail_after(DEFAULT_TIMEOUT):
                     assert await subscription.__anext__() == ToolsListChanged()
 
 
@@ -344,9 +345,9 @@ async def test_the_handshake_setting_ends_a_modern_client_on_2025_11_25(monkeypa
             assert client.server_capabilities.tools.list_changed is True
             await client.list_tools()           # a message fills the watcher's holder
             await health.change()
-            await _until(lambda: pushed, "the push")
+            await wait_until_async(lambda: pushed, "the push")
             polls = health.polls
-            await _until(lambda: health.polls >= polls + 3, "three more steady polls")
+            await wait_until_async(lambda: health.polls >= polls + 3, "three more steady polls")
     assert len(pushed) == 1
     assert [m.params for m in pushed if m.params and m.params.meta] == [], "never stamped"
 
@@ -359,7 +360,7 @@ async def test_a_client_that_insists_on_2026_07_28_is_served_only_where_the_sett
     monkeypatch.setenv(mcp_era.ERA_ENV, era)
     async with _served(monkeypatch, _Health()) as pipe:
         async with Client(pipe, mode="2026-07-28") as client:
-            with anyio.fail_after(10):
+            with anyio.fail_after(DEFAULT_TIMEOUT):
                 if served:
                     assert [t.name for t in (await client.list_tools()).tools] == ["echo"]
                 else:
@@ -385,7 +386,7 @@ async def test_timing_reports_the_tool_name_and_the_config():
     report = AsyncMock()
     async with Client(_proxy(report=report), mode="legacy") as client:
         await client.call_tool("echo", {})
-        await asyncio.sleep(0)   # let the fire-and-forget task run
+        await wait_until_async(lambda: report.await_count, "the fire-and-forget report ran")
     report.assert_awaited_once()
     cfg, tool, started_epoch, total_ms = report.await_args.args
     assert cfg.backend_url == config().backend_url and cfg.launcher_pid == 5151
@@ -404,7 +405,7 @@ async def test_timing_reports_even_when_the_tool_call_fails():
     async with Client(_proxy(backend, report), mode="legacy") as client:
         with pytest.raises(MCPError):
             await client.call_tool("echo", {})
-        await asyncio.sleep(0)
+        await wait_until_async(lambda: report.await_count, "the report of the failed call ran")
     report.assert_awaited_once()
     assert report.await_args.args[1] == "echo"
 
@@ -416,7 +417,7 @@ async def test_a_call_that_raises_out_of_the_handler_is_still_reported():
     with pytest.raises(ValueError):
         await server._on_call_tool(_Ctx("tools/call"),
                                    mcp_types.CallToolRequestParams(name="echo", arguments={}))
-    await asyncio.sleep(0)
+    await wait_until_async(lambda: report.await_count, "the report of the raised call ran")
     report.assert_awaited_once()
     assert report.await_args.args[1] == "echo"
 
@@ -425,7 +426,7 @@ async def test_timing_reports_a_call_to_an_unknown_name_too():
     report = AsyncMock()
     async with Client(_proxy(report=report), mode="legacy") as client:
         await client.call_tool("page_wait_for", {})
-        await asyncio.sleep(0)
+        await wait_until_async(lambda: report.await_count, "the report of the unknown name ran")
     assert report.await_args.args[1] == "page_wait_for"
 
 
@@ -444,8 +445,7 @@ async def test_timing_does_not_await_the_report():
         assert _text(result) == "hi"
         assert finished == []       # returned without waiting on the report
         gate.set()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_until_async(lambda: finished, "the report finished once released")
     assert len(finished) == 1
 
 
@@ -690,13 +690,6 @@ def _events():
     return {"started": anyio.Event(), "cancelled": anyio.Event()}
 
 
-async def _until(predicate, what, seconds=5.0):
-    deadline = time.monotonic() + seconds
-    while not predicate():
-        assert time.monotonic() < deadline, f"not within {seconds} s: {what}"
-        await anyio.sleep(0.01)
-
-
 async def test_a_cancelled_call_is_cancelled_at_the_backend_and_its_session_closed():
     """The client gives up on a call (Esc, its own timeout): it sends
     notifications/cancelled and the SDK cancels the proxy's handler. The backend must hear
@@ -709,14 +702,14 @@ async def test_a_cancelled_call_is_cancelled_at_the_backend_and_its_session_clos
         async with Client(_proxy(backend, report), mode="legacy") as client:
             async with anyio.create_task_group() as group:
                 group.start_soon(client.call_tool, "slow", {})
-                with anyio.fail_after(10):
+                with anyio.fail_after(DEFAULT_TIMEOUT):
                     await events["started"].wait()
                 group.cancel_scope.cancel()
-            with anyio.fail_after(5):
+            with anyio.fail_after(DEFAULT_TIMEOUT):
                 await events["cancelled"].wait()
-            await _until(lambda: live_sessions(real.server) == 0, "every session closed")
+            await wait_until_async(lambda: live_sessions(real.server) == 0, "every session closed")
             assert (await client.call_tool("echo", {"text": "after"})).is_error is False
-        await asyncio.sleep(0)
+        await wait_until_async(lambda: report.await_count, "the cancelled call was reported")
     assert backend.sessions(), "the sessions were DELETEd"
     assert [c.args[1] for c in report.await_args_list][:1] == ["slow"], (
         "a cancelled call is timed too")
@@ -730,10 +723,10 @@ async def test_a_list_refresh_the_client_gives_up_on_closes_its_session():
         async with Client(_proxy(backend), mode="legacy") as client:
             async with anyio.create_task_group() as group:
                 group.start_soon(client.call_tool, "echo", {})
-                with anyio.fail_after(10):
+                with anyio.fail_after(DEFAULT_TIMEOUT):
                     await real.wrapped.reached.wait()
                 group.cancel_scope.cancel()
-            await _until(lambda: live_sessions(real.server) == 0, "the list's session closed")
+            await wait_until_async(lambda: live_sessions(real.server) == 0, "the list's session closed")
 
 
 async def test_a_gate_probe_that_runs_out_of_time_closes_its_session(monkeypatch):
@@ -748,7 +741,7 @@ async def test_a_gate_probe_that_runs_out_of_time_closes_its_session(monkeypatch
                 await server._handshake_gate(_Ctx("initialize"), AsyncMock())
             assert "TimeoutError" in refused.value.message
             assert live_sessions(real.server) == 1, "the server made the session meanwhile"
-            await _until(lambda: live_sessions(real.server) == 0, "the probe's session closed")
+            await wait_until_async(lambda: live_sessions(real.server) == 0, "the probe's session closed")
         assert len(backend.sessions()) == 1
 
 
@@ -768,13 +761,16 @@ async def test_calls_in_flight_when_stdin_closes_are_cancelled_and_closed():
         async with anyio.create_task_group() as group:
             async with Client(_proxy(backend), mode="legacy") as client:
                 group.start_soon(call_and_lose_the_answer, client)
-                with anyio.fail_after(10):
+                with anyio.fail_after(DEFAULT_TIMEOUT):
                     await events["started"].wait()
             closed = time.monotonic()   # stdin is closed: the proxy has returned
-        with anyio.fail_after(5):
+        with anyio.fail_after(DEFAULT_TIMEOUT):
             await events["cancelled"].wait()
         assert live_sessions(real.server) == 0
-        assert time.monotonic() - closed < policy.BACKEND_DRAIN_SECONDS + 1
+        # The proxy has already returned, so the cancel was sent inside its drain and this
+        # reads about zero. The call itself would sleep 30 s: 5 s of slack for a starved
+        # runner still tells "cancelled by the drain" from "cancelled at the end".
+        assert time.monotonic() - closed < policy.BACKEND_DRAIN_SECONDS + 5
 
 
 # ---- a result above httpx2's SSE event cap ------------------------------------------------

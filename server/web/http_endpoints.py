@@ -40,7 +40,7 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Callable, Optional, Tuple
@@ -91,7 +91,9 @@ IDENTITY_WORKERS = 2
 MAX_IDENTITY_PENDING = 64
 # A tools/call waits at most this long for its session's lookup to finish, so the call is
 # filed under the client's real process (routing key, launcher pid) when the lookup is quick,
-# and goes ahead regardless when it is not.
+# and goes ahead regardless when it is not. The request that starts a lookup waits for the
+# lookup's read of the TCP table, and only for that read. All of one request's waits share
+# this one budget (IdentityWait), so a request is held at most this long in total.
 IDENTITY_WAIT_SECONDS = 1.0
 
 _identity_pool = None
@@ -106,6 +108,35 @@ def identity_pool():
             _identity_pool = ThreadPoolExecutor(max_workers=IDENTITY_WORKERS,
                                                 thread_name_prefix="identity")
         return _identity_pool
+
+
+class IdentityWait:
+    """The time one request may be held for identity: IDENTITY_WAIT_SECONDS from its first
+    wait, however many waits it makes. A request that starts a lookup waits for the TCP-table
+    read and, if it is a tools/call, then for the identity; the proxy transport also retries
+    a request, and a DELETE is on a call's hot path, so two full waits per request would
+    double what the budget promises."""
+
+    def __init__(self):
+        self.deadline = None      # set by the first wait, so a request that never waits costs nothing
+
+    def remaining(self):
+        loop = asyncio.get_running_loop()
+        if self.deadline is None:
+            self.deadline = loop.time() + IDENTITY_WAIT_SECONDS
+        return self.deadline - loop.time()
+
+    async def settle(self, future):
+        """Wait for `future`, a concurrent future, until the shared deadline. Never raises:
+        the request goes ahead whether or not the client could be named. Shielded, so giving
+        up on the wait does not cancel a lookup that has not started yet."""
+        remaining = self.remaining()
+        if remaining <= 0:
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)), remaining)
+        except Exception:
+            pass
 
 
 class BodyTooLarge(Exception):
@@ -636,22 +667,37 @@ class HttpEndpoints:
 
     def _note_client(self, sid, client, client_pid):
         """File the session's row (cheap, on the loop) and start its identity lookup on a
-        worker. Returns the lookup in flight for the session, or None."""
+        worker. Returns (lookup, peer_read): the lookup in flight for the session, or None,
+        and, only when THIS request started the lookup, the future that completes once the
+        lookup has read the TCP table (the request holds its connection open until then)."""
         server = self.server
         entry = server.note_http_client(sid, client, client_pid=client_pid)
         if entry is None:
-            return self._identity_pending.get(sid)
+            return self._identity_pending.get(sid), None
         if len(self._identity_pending) >= MAX_IDENTITY_PENDING:
             logger.debug("identity lookup skipped: %d already in flight",
                          len(self._identity_pending))
             entry["identity_tried"] = None   # a later request may try again
-            return None
-        future = identity_pool().submit(server.identify_http_client, entry, client, client_pid)
+            return None, None
+        peer_read = Future()
+
+        def table_read():
+            """The lookup is done with the peer's connection. Idempotent: it is also
+            called when the lookup fails before it got that far."""
+            if not peer_read.done():
+                try:
+                    peer_read.set_result(None)
+                except InvalidStateError:
+                    pass
+
+        future = identity_pool().submit(server.identify_http_client, entry, client, client_pid,
+                                        table_read)
         self._identity_pending[sid] = future
         entry["identity_pending"] = True      # routing.client_key: no final key yet
         loop = asyncio.get_running_loop()
 
         def done(finished, sid=sid):
+            table_read()      # a lookup cancelled before it ran never read the table
             self._identity_pending.pop(sid, None)
             entry["identity_pending"] = False
             if finished.cancelled():
@@ -665,7 +711,7 @@ class HttpEndpoints:
             except RuntimeError:
                 pass    # the loop is gone: the server is stopping
         future.add_done_callback(done)
-        return future
+        return future, peer_read
 
     def _rekey_selection(self, sid):
         """The lookup landed: a browser the client chose while it was still anonymous (filed
@@ -678,22 +724,13 @@ class HttpEndpoints:
         except Exception as e:
             logger.debug(f"could not re-key the selection of session {sid}: {e!r}")
 
-    @staticmethod
-    async def _identity_settled(future):
-        """Wait for an identity lookup, but only IDENTITY_WAIT_SECONDS and without ever
-        raising: the call goes ahead whether or not the client could be named. Shielded, so
-        giving up on the wait does not cancel a lookup that has not started yet."""
-        try:
-            await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)),
-                                   IDENTITY_WAIT_SECONDS)
-        except Exception:
-            pass
-
     async def _track_and_forward(self, scope, receive, send, session_key=None):
         server = self.server
         asgi_app = self.asgi_app
         sid = None
         identity = None    # the session's identity lookup, when one is in flight
+        peer_read = None   # done once a lookup this request started has read the TCP table
+        wait = IdentityWait()   # one budget for every wait on identity this request makes
         client = scope.get("client")  # (host, port) or None
         try:
             headers = dict(scope.get("headers") or [])
@@ -710,9 +747,15 @@ class HttpEndpoints:
                 except (ValueError, AttributeError):
                     client_pid = None
             if sid:
-                identity = self._note_client(sid, client, client_pid)
+                identity, peer_read = self._note_client(sid, client, client_pid)
         except Exception as e:
             logger.debug(f"client tracking error: {e}")
+        if peer_read is not None:
+            # The peer is found by its source port in the TCP table, and a proxy or relay
+            # request is on a connection of its own that closes right after the response.
+            # Answering first would leave the lookup a socket that is already gone, so this
+            # request holds its client, and with it the connection, until the table is read.
+            await wait.settle(peer_read)
 
         # Buffer POST bodies so we can record tools/call invocations, then replay them
         # transparently to the downstream MCP app.
@@ -748,7 +791,7 @@ class HttpEndpoints:
                     return
                 body = b"".join(chunks)
                 if identity is not None and b"tools/call" in body:
-                    await self._identity_settled(identity)
+                    await wait.settle(identity)
                 recorded_call = server._record_from_body(sid, body)
             except Exception as e:
                 logger.debug(f"command capture error: {e}")

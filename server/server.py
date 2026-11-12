@@ -849,9 +849,9 @@ class BrowserPlugServer:
         return client_identity.note_http_client(self.http_clients, session_id, client,
                                                 client_pid)
 
-    def identify_http_client(self, entry, client, client_pid=None):
+    def identify_http_client(self, entry, client, client_pid=None, on_peer_read=None):
         """The blocking half of track_http_client: resolve who is behind `entry`."""
-        client_identity.identify_http_client(entry, client, client_pid)
+        client_identity.identify_http_client(entry, client, client_pid, on_peer_read)
 
     def record_launcher_version(self, launcher_pid, version):
         """Remember which build a launcher process is running (from its /health poll)."""

@@ -33,6 +33,7 @@ from browserplug_shared.mcp_port import (HEALTH_SERVICE, MCP_PORT_DEFAULT, MCP_P
                                          find_mcp_port, browserplug_health, mcp_port_sequence, pinned_mcp_port,
                                          port_is_bindable, seek_browserplug)
 from server.server import BrowserPlugServer
+from wait_helper import DEFAULT_TIMEOUT
 
 IS_WINDOWS = os.name == "nt"
 
@@ -126,7 +127,7 @@ class _StubHTTP(threading.Thread):
     def stop(self):
         self.httpd.shutdown()
         self.httpd.server_close()
-        self.join(timeout=5)
+        self.join(timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.fixture
@@ -257,7 +258,7 @@ def test_seek_finds_a_browserplug_bound_on_the_wildcard_address(stub_servers, mo
     base = _free_band(3)
     stub_servers(base + 1, _browserplug_payload(base + 1), host="0.0.0.0")
 
-    port, health = seek_browserplug(base, base + 2, timeout=1.0)
+    port, health = seek_browserplug(base, base + 2, timeout=DEFAULT_TIMEOUT)
     assert port == base + 1, "the seek skipped a server bound on the wildcard address"
     assert health["mcp_port"] == base + 1
 
@@ -432,7 +433,7 @@ def test_launcher_finds_a_server_that_relocated_one_port_up(stub_servers, monkey
     monkeypatch.delenv(MCP_PORT_ENV, raising=False)
     base = _free_band(2)
     stub_servers(base + 1, _browserplug_payload(base + 1))
-    assert launcher.find_server_port(timeout=1.0, start_port=base,
+    assert launcher.find_server_port(timeout=DEFAULT_TIMEOUT, start_port=base,
                                      last_port=base + 1) == base + 1
 
 
@@ -447,10 +448,10 @@ def test_launcher_walks_past_a_non_browserplug_server_squatting_on_the_first_por
     stub_servers(base, {"status": "ok", "service": "grafana", "version": "11"})
     stub_servers(base + 1, _browserplug_payload(base + 1))
 
-    assert browserplug_health(base, timeout=1.0) is None
-    assert launcher.find_server_port(timeout=1.0, start_port=base,
+    assert browserplug_health(base, timeout=DEFAULT_TIMEOUT) is None
+    assert launcher.find_server_port(timeout=DEFAULT_TIMEOUT, start_port=base,
                                      last_port=base + 1) == base + 1
-    port, health = seek_browserplug(base, base + 1, timeout=1.0)
+    port, health = seek_browserplug(base, base + 1, timeout=DEFAULT_TIMEOUT)
     assert port == base + 1 and health["mcp_port"] == base + 1
 
 
@@ -462,15 +463,15 @@ def test_a_degraded_health_is_still_our_server(stub_servers, monkeypatch):
     base = _free_band(1)
     stub_servers(base, {"status": "degraded", "service": HEALTH_SERVICE, "server_pid": 4242,
                         "health_error": "RuntimeError: boom"})
-    assert browserplug_health(base, timeout=1.0)["status"] == "degraded"
-    port, _health = seek_browserplug(base, base, timeout=1.0)
+    assert browserplug_health(base, timeout=DEFAULT_TIMEOUT)["status"] == "degraded"
+    port, _health = seek_browserplug(base, base, timeout=DEFAULT_TIMEOUT)
     assert port == base
 
 
 def test_a_status_the_server_never_sends_is_not_identification(stub_servers):
     base = _free_band(1)
     stub_servers(base, {"status": "starting", "service": HEALTH_SERVICE})
-    assert browserplug_health(base, timeout=1.0) is None
+    assert browserplug_health(base, timeout=DEFAULT_TIMEOUT) is None
 
 
 def test_health_probe_ignores_a_proxy_set_in_the_environment(stub_servers, monkeypatch):
@@ -496,13 +497,13 @@ def test_health_probe_ignores_a_proxy_set_in_the_environment(stub_servers, monke
     monkeypatch.delenv("NO_PROXY", raising=False)
     monkeypatch.delenv("no_proxy", raising=False)
 
-    health = browserplug_health(base, timeout=2.0)
+    health = browserplug_health(base, timeout=DEFAULT_TIMEOUT)
     assert health is not None, (
         "the /health probe was routed through HTTP_PROXY — a healthy local server "
         "reads as DOWN on every corporate-proxy machine")
     assert health["mcp_port"] == base
 
-    port, _ = seek_browserplug(base, base + 1, timeout=2.0)
+    port, _ = seek_browserplug(base, base + 1, timeout=DEFAULT_TIMEOUT)
     assert port == base, "the seek walked past a live server because of HTTP_PROXY"
 
 
@@ -538,7 +539,7 @@ def test_seek_does_not_network_probe_ports_with_no_listener(stub_servers, monkey
     monkeypatch.setattr(mp, "browserplug_health",
                         lambda port, **kw: (probed.append(port), real_health(port, **kw))[1])
 
-    port, health = seek_browserplug(base, base + 2, timeout=1.0)
+    port, health = seek_browserplug(base, base + 2, timeout=DEFAULT_TIMEOUT)
 
     assert port == base + 2 and health["mcp_port"] == base + 2, (
         "the skip must remove COST, never a candidate — a live server was walked past")
@@ -565,7 +566,10 @@ def test_failed_seek_over_an_empty_band_is_fast(monkeypatch):
     elapsed = time.monotonic() - started
 
     assert port is None
-    budget = span * mp.SEEK_TIMEOUT_SECONDS / 4
+    # Fixed code takes ~15 ms. The bug paid SEEK_TIMEOUT_SECONDS per port, which is
+    # span * SEEK_TIMEOUT_SECONDS in all, so half of that separates the two with 250x room
+    # above the fixed time for a starved runner.
+    budget = span * mp.SEEK_TIMEOUT_SECONDS / 2
     assert elapsed < budget, (
         f"a failed seek over {span} empty ports took {elapsed:.1f}s (budget {budget:.1f}s) "
         f"— it is paying a per-port network timeout again; over the real "
@@ -584,7 +588,7 @@ def test_env_pin_is_honoured_and_skips_the_seek(stub_servers, monkeypatch):
     monkeypatch.setattr(launcher, "seek_browserplug", lambda *a, **k: seeks.append(k) or (2831, {}))
     stub_servers(pinned, _browserplug_payload(pinned))
 
-    assert launcher.find_server_port(timeout=1.0) == pinned
+    assert launcher.find_server_port(timeout=DEFAULT_TIMEOUT) == pinned
     assert seeks == [], "a pinned port must never trigger a range seek"
 
 

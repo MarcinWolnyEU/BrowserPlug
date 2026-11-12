@@ -35,7 +35,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 import urllib.request
 
 import mcp_types
@@ -50,11 +49,24 @@ from browserplug_shared import mcp_era
 from browserplug_shared.mcp_port import MCP_PORT_ENV
 from browserplug_shared.version import __version__ as BROWSERPLUG_VERSION
 from launcher.stdio_relay import TOOLS_POLL_SECONDS
+from server.proxy import policy
 from server.tools.tool_renames import renamed_tool_message
+from server.web import http_endpoints
 
 from test_server_process_lifecycle import ROOT, SERVER_SCRIPT, Sandbox, sandbox  # noqa: F401
+from wait_helper import wait_until_async
 
 LAUNCHER = ROOT / "launcher" / "launcher.py"
+
+# How long the connection map may take to draw the launcher hop, from the product's own
+# numbers. The hop needs two things. A session whose lookup read the TCP table: the first
+# request of a session is held at most IDENTITY_WAIT_SECONDS for that, and every session
+# the client opened before this wait began has had that long already. And the launcher's
+# version, which only the proxy's /health poll brings: one poll every TOOLS_POLL_SECONDS, a
+# poll the server does not answer costs SIDE_CHANNEL_TIMEOUT_SECONDS before the next, and
+# three in a row may be lost. The sum is doubled for a loaded runner.
+LAUNCHER_HOP_SECONDS = 2 * (http_endpoints.IDENTITY_WAIT_SECONDS
+                            + 3 * (policy.TOOLS_POLL_SECONDS + policy.SIDE_CHANNEL_TIMEOUT_SECONDS))
 
 STUB = """\
 import subprocess, sys
@@ -100,16 +112,6 @@ def _clients(box):
 
     walk(report)
     return found
-
-
-async def _until(predicate, what, timeout=30.0):
-    deadline = time.monotonic() + timeout
-    while True:
-        value = await asyncio.to_thread(predicate)
-        if value:
-            return value
-        assert time.monotonic() < deadline, f"timed out waiting for {what}"
-        await asyncio.sleep(0.25)
 
 
 def _proxy_launcher(sandbox, tmp_path, **env_extra):
@@ -164,13 +166,22 @@ async def test_a_proxy_session_survives_a_server_restart(sandbox, tmp_path):  # 
                 assert _text(stale) == renamed_tool_message("page_navigate")
 
                 # The process walk names the launcher (not the proxy child that holds the
-                # socket) and ties it to the build the proxy's /health poll reported.
+                # socket) and ties it to the build the proxy's /health poll reported. Every
+                # backend session here is on connections that close with their response, so
+                # this is also the end-to-end check that the server reads the TCP table
+                # while the connection is open (test_identity_connection_lifetime).
                 launched = json.loads(ids.read_text())
-                rows = await _until(
-                    lambda: [r for r in _clients(sandbox)
-                             if r.get("launcher_pid") == launched["launcher_pid"]
-                             and r.get("launcher_version")],
-                    "the launcher hop on the connection map")
+                def hop_rows():
+                    return [r for r in _clients(sandbox)
+                            if r.get("launcher_pid") == launched["launcher_pid"]
+                            and r.get("launcher_version")]
+
+                # Each poll is a blocking HTTP report, so it runs on a worker thread and
+                # the poll interval is 0.25 s, not the helper's 10 ms.
+                rows = await wait_until_async(
+                    lambda: asyncio.to_thread(hop_rows),
+                    "the launcher hop was on the connection map",
+                    timeout=LAUNCHER_HOP_SECONDS, interval=0.25)
                 assert rows[0]["launcher_version"] == BROWSERPLUG_VERSION
                 assert rows[0]["pid"] == launched["client_pid"]
 
@@ -182,10 +193,8 @@ async def test_a_proxy_session_survives_a_server_restart(sandbox, tmp_path):  # 
                 second = await asyncio.to_thread(sandbox.wait_healthy, 60.0,
                                                  first["server_pid"])
                 assert second["server_pid"] != first["server_pid"]
-                deadline = time.monotonic() + 30
-                while not pushed:
-                    assert time.monotonic() < deadline, "no tools/list_changed after the restart"
-                    await asyncio.sleep(0.2)
+                await wait_until_async(lambda: pushed, "tools/list_changed arrived after the restart",
+                                       timeout=30)
 
                 relisted = {t.name for t in (await client.list_tools()).tools}
                 assert TOOLS <= relisted
@@ -255,10 +264,8 @@ async def test_the_proxy_serves_a_2026_07_28_client_only_where_the_era_setting_a
                         async with client.listen(tools_list_changed=True):
                             pass
                     second = await restart()
-                    deadline = time.monotonic() + 45
-                    while not bare:
-                        assert time.monotonic() < deadline, "no bare tools/list_changed"
-                        await asyncio.sleep(0.2)
+                    await wait_until_async(lambda: bare, "a bare tools/list_changed arrived",
+                                           timeout=45)
 
                 assert TOOLS <= {t.name for t in (await client.list_tools()).tools}
                 again = await client.call_tool("server_info", {})
@@ -293,7 +300,10 @@ def _proxy_process(url):
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def _exit_code(proc, seconds=15):
+# The proxy takes 1 to 4 s to start and exit on an idle machine. The bound only ends a hung
+# proxy, so it is many times that: a CPU-starved runner can stretch interpreter start-up well
+# past 15 s.
+def _exit_code(proc, seconds=60):
     try:
         return proc.wait(timeout=seconds)
     except subprocess.TimeoutExpired:
@@ -319,7 +329,7 @@ def test_the_proxy_answers_then_exits_when_stdin_closes_after_a_session():
         reader.start()
         proc.stdin.write(json.dumps(INITIALIZE).encode() + b"\n")
         proc.stdin.flush()
-        reader.join(15)
+        reader.join(60)     # interpreter start-up counts, as for _exit_code
         assert lines and lines[0], "no answer to the initialize"
         reply = json.loads(lines[0])
         assert reply["id"] == 1 and reply["error"]["code"] == -32603

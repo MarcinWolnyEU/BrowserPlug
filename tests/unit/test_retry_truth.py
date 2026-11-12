@@ -24,7 +24,8 @@ from server.tools.tool_outcome import (EXTENSION_DISCONNECTED, EXTENSION_SEND_FA
                                        arm, classify, fail, read)
 from server.tools.browser_calls import BrowserCalls
 
-from test_disconnect_retry import (FakeWS, connect, disconnect, hello, wait_until)  # noqa: F401
+from test_disconnect_retry import (FakeWS, connect, disconnect, hello)  # noqa: F401
+from wait_helper import wait_until_async as wait_until
 
 
 @pytest.fixture

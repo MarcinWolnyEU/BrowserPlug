@@ -27,6 +27,9 @@
 #     # Property-based fuzz tests (tests/unit/test_fuzz_*.py); a floor, not a pin, since
 #     # the tests state properties and do not depend on one release's behaviour.
 #     "hypothesis>=6.169.0",
+#     # Reads .github/workflows/ci.yml in tests/unit/test_ci_local.py. scripts/ci_local.py
+#     # declares the same specifier.
+#     "pyyaml>=6.0.2",
 #     # The static gate (tests/unit/test_static_analysis.py) and `--ruff`.
 #     "ruff==0.16.9",
 # ]

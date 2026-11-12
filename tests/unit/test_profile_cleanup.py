@@ -22,6 +22,7 @@ import pytest
 import test_imports  # noqa: F401  (automatic path setup)
 import firefox_test_utils as ftu
 from firefox_test_utils import FirefoxTestManager
+from wait_helper import wait_until
 
 
 def _rmtree_failing(times):
@@ -235,17 +236,13 @@ def _browser_with_a_helper(mode):
     return proc, int(proc.stdout.readline())
 
 
-def _gone(pid, timeout=10):
+def _gone(pid):
+    """True once `pid` is dead: gone, or a zombie waiting for an init that reaps slowly."""
     import psutil
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
-                return True   # dead, waiting for an init that reaps slowly
-        except psutil.NoSuchProcess:
-            return True
-        time.sleep(0.05)
-    return False
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
 
 
 @posix_only
@@ -258,7 +255,7 @@ def test_stop_takes_the_browsers_helpers_down_with_it(mode):
     try:
         forced = ftu._stop_firefox_tree(proc, None, "firefox", timeout=2)
         assert proc.poll() is not None
-        assert _gone(helper), "the helper outlived its browser"
+        wait_until(lambda: _gone(helper), "the helper ended with its browser", interval=0.05)
         assert forced is (mode == "ignore")
     finally:
         proc.stdout.close()
@@ -276,7 +273,7 @@ def test_stop_reaches_helpers_after_the_parent_has_gone():
         proc.kill()
         proc.wait()
         ftu._stop_firefox_tree(proc, None, "firefox", timeout=2)
-        assert _gone(helper)
+        wait_until(lambda: _gone(helper), "the helper ended after its parent had gone", interval=0.05)
     finally:
         proc.stdout.close()
 
@@ -295,11 +292,8 @@ def test_a_group_of_only_a_zombie_counts_as_gone_and_is_not_forced():
     proc, helper = _browser_with_a_helper("obey")
     try:
         os.killpg(proc.pid, signal.SIGKILL)   # leader and helper die; nobody reaps the leader
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not (
-                browser_procs._group_gone(proc.pid)):
-            time.sleep(0.05)
-        assert browser_procs._group_gone(proc.pid)
+        wait_until(lambda: browser_procs._group_gone(proc.pid),
+                   "the group held nothing but a zombie", interval=0.05)
         # Nothing has reaped the leader yet: only a zombie is left in the group.
         assert psutil.Process(proc.pid).status() == psutil.STATUS_ZOMBIE
         started = time.monotonic()

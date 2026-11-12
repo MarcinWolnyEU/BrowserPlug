@@ -17,8 +17,9 @@ from unittest.mock import patch
 import pytest
 
 import test_imports  # noqa: F401
-from test_browser_registry import (FakeWS, connect, disconnect, hello, send, server,  # noqa: F401
-                                   wait_until)
+from test_browser_registry import (FakeWS, connect, disconnect, hello, send,  # noqa: F401
+                                   server)
+from wait_helper import wait_until_async as wait_until
 
 
 def _sent_ids(ws):

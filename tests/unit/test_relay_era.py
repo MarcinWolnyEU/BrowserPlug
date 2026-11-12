@@ -43,6 +43,7 @@ from browserplug_shared import mcp_era
 from browserplug_shared.version import CLIENT_PID_HEADER
 from launcher import relay_era
 from launcher.stdio_relay import StdioRelay
+from wait_helper import assert_never_within, wait_until
 
 VERSION = "2026-07-28"
 CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities"
@@ -556,10 +557,8 @@ class TestPostCleanup:
             alive = weakref.ref(watch)
             watch.stop()
             del watch
-            end = time.monotonic() + 5      # the cancelled timer thread exits on its own
-            while alive() is not None and time.monotonic() < end:
-                time.sleep(0.01)
-            assert alive() is None
+            # The cancelled timer thread exits on its own, and lets go of the watch then.
+            wait_until(lambda: alive() is None, "the stopped watch was freed without a gc run")
         finally:
             if was_enabled:
                 gc.enable()
@@ -703,20 +702,35 @@ class TestSubscriptions:
         out = Collected()
         subs = relay_era.Subscriptions(out.emit, out.emit_error)
         original = out.emit
+        ack_started = threading.Event()
+        release = threading.Event()
 
-        def slow_emit(raw):
-            time.sleep(0.05)       # the window in which a watcher would slip in
+        def slow_ack(raw):
+            # Holds only the acknowledgment open: the window in which a watcher would slip
+            # in. It is held on an event, not for a time, so a slow runner cannot close it.
+            if "acknowledged" in raw:
+                ack_started.set()
+                release.wait(10)
             original(raw)
 
-        subs._emit = slow_emit
+        subs._emit = slow_ack
         listener = threading.Thread(
             target=lambda: subs.listen(listen_frame("a", toolsListChanged=True)))
+        watcher = threading.Thread(target=subs.tools_changed)
         listener.start()
-        deadline = time.monotonic() + 2
-        while not len(subs) and time.monotonic() < deadline:
-            time.sleep(0.001)
-        subs.tools_changed()
-        listener.join(5)
+        try:
+            assert ack_started.wait(10), "the acknowledgment was never emitted"
+            watcher.start()
+            # With the lock the watcher waits for the acknowledgment; without it, its notice
+            # goes out while the acknowledgment is still held.
+            assert_never_within(
+                lambda: any(f["method"].endswith("tools/list_changed") for f in out.frames),
+                "a notice went out ahead of the acknowledgment", within=0.3)
+        finally:
+            release.set()
+            listener.join(10)
+            if watcher.ident is not None:       # started
+                watcher.join(10)
         assert [f["method"] for f in out.frames] == [
             "notifications/subscriptions/acknowledged", "notifications/tools/list_changed"]
 

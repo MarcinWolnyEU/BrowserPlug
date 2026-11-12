@@ -31,6 +31,7 @@ from server.runtime import graceful_restart as gr
 from server.runtime import lifecycle
 from server.runtime.graceful_restart import PENDING_REASON, RestartHooks, perform_restart
 from server.server import BrowserPlugServer
+from wait_helper import wait_until, wait_until_async
 
 _EOF = object()
 
@@ -65,14 +66,6 @@ class FakeWS:
         if item is _EOF:
             raise StopAsyncIteration
         return item
-
-
-async def _wait_until(predicate, what, timeout=3.0):
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out after {timeout}s waiting until {what}")
-        await asyncio.sleep(0.01)
 
 
 # --- (L3) real children ------------------------------------------------------------------
@@ -225,31 +218,34 @@ async def test_during_the_drain_new_calls_get_the_restart_message_and_in_flight_
     real_probe = server._probe_browser_identity
     server._probe_browser_identity = lambda *a, **k: {}
     task = asyncio.create_task(server.handle_extension_connection(ws))
-    await asyncio.sleep(0.01)
     ws.feed({"type": "extension_hello", "data": {"instanceId": "ff-restart"}})
-    await asyncio.sleep(0.02)
+    await wait_until_async(lambda: "ff-restart" in server.browsers, "the browser registered")
     browser = server.browsers["ff-restart"]
 
     # An idempotent read, in flight when the restart begins.
     inflight = asyncio.create_task(server.send_request_and_wait(
         {"id": "r1", "type": "request", "action": "tabs.screenshot", "data": {}},
-        timeout=5.0, browser=browser))
-    await _wait_until(lambda: ws.sent, "the in-flight request reached the browser")
+        timeout=60.0, browser=browser))
+    await wait_until_async(lambda: ws.sent, "the in-flight request reached the browser")
 
     exited = []
     hooks = dataclasses.replace(
         server.lifecycle.restart_hooks(),
         spawn_replacement=lambda: None, stop_http=lambda: None,
         exit_process=lambda: exited.append(True))
-    restart = asyncio.create_task(perform_restart(hooks, trigger="test", drain_timeout=3.0,
+    # The drain budget outlasts the test: the drain ends only when ws.drop() fails r1 below.
+    restart = asyncio.create_task(perform_restart(hooks, trigger="test", drain_timeout=60.0,
                                                   ack_flush=0))
-    await asyncio.sleep(0.15)              # the drain is polling: r1 is still pending
+    # perform_restart raises the flag before its first await, then polls the drain while r1
+    # is still pending. Waiting on the flag is waiting for what the refusal below reads.
+    await wait_until_async(lambda: server.rpc.restarting, "the restart to mark the server")
+    assert not restart.done(), "the drain ended while r1 was still pending"
 
     # (1) a NEW admission during the drain: the restart message, and nothing on the wire.
     sent_before = len(ws.sent)
     fresh = await asyncio.wait_for(server.send_request_and_wait(
         {"id": "r2", "type": "request", "action": "tabs.screenshot", "data": {}},
-        timeout=5.0, browser=browser), 1.0)
+        timeout=60.0, browser=browser), 10.0)
     # Deliberate change: the refusal now carries a code and a retry verdict (nothing was sent).
     assert fresh == {"error": gr.RESTARTING_REFUSAL, "code": "SERVER_RESTARTING",
                      "retryable": True}
@@ -258,14 +254,14 @@ async def test_during_the_drain_new_calls_get_the_restart_message_and_in_flight_
     # (2) the socket drops mid-drain: the in-flight read fails AT ONCE with the restart
     # wording instead of polling for a reconnect that the shutdown outlives.
     ws.drop()
-    await asyncio.wait_for(task, 2.0)
-    result = await asyncio.wait_for(inflight, 1.0)
+    await asyncio.wait_for(task, 10.0)
+    result = await asyncio.wait_for(inflight, 10.0)
     # A read: the restart wording plus the read-only sentence; retryable is data.
     assert result["error"].startswith(PENDING_REASON)
     assert result["error"].endswith("safe to retry.")
     assert result["retryable"] is True
 
-    await asyncio.wait_for(restart, 5.0)
+    await asyncio.wait_for(restart, 10.0)
     assert exited == [True]
     server._probe_browser_identity = real_probe
 
@@ -301,7 +297,7 @@ def test_a_second_restart_while_one_is_running_spawns_nothing(monkeypatch):
     except Exception as e:
         second_error = e
     release.set()
-    assert exited.wait(5), "the first restart never finished"
+    assert exited.wait(30), "the first restart never finished"
     time.sleep(0.5)   # a second sequence, if one was started, would have spawned by now
 
     assert spawned == [1], f"{len(spawned)} replacements were spawned for two requests"
@@ -323,12 +319,9 @@ def test_an_aborted_restart_can_be_retried(monkeypatch):
     monkeypatch.setattr(server.lifecycle, "restart_hooks", make_hooks)
 
     first = server._begin_restart("first")
-    assert first.result(5) == "no spawn"
-    deadline = time.monotonic() + 3
-    while server.lifecycle.restarting and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert server.lifecycle.restarting is False
-    server._begin_restart("again").result(5)
+    assert first.result(30) == "no spawn"
+    wait_until(lambda: not server.lifecycle.restarting, "the failed restart cleared the flag")
+    server._begin_restart("again").result(30)
     assert len(attempts) == 2
 
 

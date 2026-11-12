@@ -121,7 +121,8 @@ def _ids(requirements):
 @pytest.mark.parametrize("script", [str(SERVER_SCRIPT), str(RUNNER_SCRIPT),
                                     *map(str, LAUNCHER_SCRIPTS),
                                     *(str(REPO_ROOT / s) for s in STDLIB_SCRIPTS),
-                                    str(REPO_ROOT / "assets" / "icons" / "render.py")],
+                                    str(REPO_ROOT / "assets" / "icons" / "render.py"),
+                                    str(REPO_ROOT / "scripts" / "ci_local.py")],
                          ids=lambda p: Path(p).relative_to(REPO_ROOT).as_posix())
 def test_every_script_block_parses_and_names_its_python(script):
     meta = script_metadata(script)
@@ -173,6 +174,12 @@ def test_the_launcher_declares_psutil_for_macos_only_with_the_servers_specifier(
 def test_render_declares_pillow_with_the_suites_specifier():
     assert [str(r) for r in declared(REPO_ROOT / "assets" / "icons" / "render.py")] == \
         [str(by_name(RUNNER_DEPS)["pillow"])]
+
+
+def test_ci_local_declares_pyyaml_with_the_suites_specifier():
+    """tests/unit/test_ci_local.py imports scripts/ci_local.py inside the suite's environment."""
+    assert [str(r) for r in declared(REPO_ROOT / "scripts" / "ci_local.py")] == \
+        [str(by_name(RUNNER_DEPS)["pyyaml"])]
 
 
 def test_mcp_keeps_a_major_version_ceiling():

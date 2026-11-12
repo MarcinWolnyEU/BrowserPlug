@@ -18,6 +18,7 @@ import pytest
 import test_imports  # noqa: F401
 from server.usage_panels import handle_scan
 from server.usage_panels.handle_scan import Scan
+from wait_helper import wait_until
 
 # The conftest turns the worker thread off for every test; one test here wants the real one.
 _REAL_ENSURE_WORKER = handle_scan._ensure_worker
@@ -66,7 +67,9 @@ def test_a_lookup_returns_at_once_and_queues_one_scan(clock, monkeypatch):
     t0 = time.monotonic()
     assert handle_scan.lookup(4242) is None
     assert handle_scan.lookup(4242) is None, "a second ask queues nothing more"
-    assert time.monotonic() - t0 < 0.5, "lookup must not wait for the scan"
+    # A lookup that ran the scan inline would sit in release.wait(10) above, so 5 s tells
+    # "waited for the scan" from "returned" with room for a starved runner.
+    assert time.monotonic() - t0 < 5.0, "lookup must not wait for the scan"
     assert handle_scan._queue.qsize() == 1
     release.set()
     assert drain() == [(4242, False)]
@@ -238,21 +241,66 @@ def test_a_failed_spawn_backs_off_like_a_timeout(clock, monkeypatch):
 
 # --- the real child -------------------------------------------------------------------------
 
-def test_the_child_reports_a_file_this_process_holds_open(tmp_path):
-    held = tmp_path / "held-open-by-the-test.log"
-    with open(held, "w") as fh:
-        fh.write("x")
-        scan = handle_scan._scan(os.getpid(), True, timeout=30)
+@pytest.fixture
+def normal_priority_child(monkeypatch):
+    """Start the real scan child at normal priority.
+
+    The product starts it below normal so a scan never competes with the work that made the
+    machine busy. On a CPU-saturated Windows box that class gets almost no time slice
+    (`python -c pass` took 59 s below normal and 0.1 s above normal with 24 busy loops
+    running), so these tests, which check the child's answer and not its scheduling, would
+    fail with the machine's load instead of with the code. The product setting has a test of
+    its own, below."""
+    if os.name == "nt":
+        monkeypatch.setattr(handle_scan, "_child_flags",
+                            lambda: getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+_HOLDER = "; ".join([
+    "import os, sys, time",
+    "fh = open(sys.argv[1], 'w')",
+    "fh.write('x')",
+    "fh.flush()",
+    "print(os.getpid(), flush=True)",
+    "time.sleep(120)",
+])
+
+
+def test_the_child_reports_a_file_another_process_holds_open(tmp_path, normal_priority_child):
+    """The target is a small helper process, not pytest. On Windows psutil's open_files()
+    spends a helper thread and a scheduler round on each of the target's handles, and pytest
+    holds more than a hundred."""
+    held = tmp_path / "held-open-by-the-helper.log"
+    helper = subprocess.Popen([sys.executable, "-I", "-c", _HOLDER, str(held)],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True)
+    try:
+        # The helper's own pid: under a venv the Popen pid can be the launcher trampoline.
+        pid = int(helper.stdout.readline())
+        scan = handle_scan._scan(pid, True, timeout=120)
+    finally:
+        helper.kill()
+        helper.wait(30)
+        helper.stdout.close()
     assert any(os.path.normcase(p) == os.path.normcase(str(held)) for p in scan.paths), scan
     assert scan.workspace is None or isinstance(scan.workspace, str)
 
 
-def test_the_child_names_the_error_for_a_process_that_does_not_exist():
+def test_the_child_runs_below_normal_priority():
+    flags = handle_scan._child_flags()
+    if os.name != "nt":
+        assert flags == 0, "priority classes and console flags are Windows-only"
+        return
+    assert flags & subprocess.BELOW_NORMAL_PRIORITY_CLASS
+    assert flags & subprocess.CREATE_NO_WINDOW
+
+
+def test_the_child_names_the_error_for_a_process_that_does_not_exist(normal_priority_child):
     with pytest.raises(handle_scan.ScanFailed):
-        handle_scan._scan(2_000_000_000, False, timeout=30)
+        handle_scan._scan(2_000_000_000, False, timeout=120)
 
 
-def test_a_hung_child_is_killed_at_the_deadline(monkeypatch):
+def test_a_hung_child_is_killed_at_the_deadline(monkeypatch, normal_priority_child):
     """The point of the whole module: a scan that never returns costs one child process
     and a bounded wait, not a thread of ours stuck in the kernel."""
     children = []
@@ -268,16 +316,18 @@ def test_a_hung_child_is_killed_at_the_deadline(monkeypatch):
     with pytest.raises(handle_scan.ScanTimeout):
         handle_scan._scan(os.getpid(), False, timeout=0.5)
     assert time.monotonic() - t0 < 10
-    assert children and children[0].poll() is not None, "the hung child was killed"
+    # _scan waits one second for the kill to land and no longer; a loaded box can take more.
+    assert children and children[0].wait(30) is not None, "the hung child was killed"
 
 
-def test_a_child_that_answers_nonsense_is_unavailable_not_a_crash(monkeypatch):
+def test_a_child_that_answers_nonsense_is_unavailable_not_a_crash(monkeypatch,
+                                                                   normal_priority_child):
     real_popen = subprocess.Popen
     monkeypatch.setattr(
         subprocess, "Popen",
         lambda args, **kw: real_popen([sys.executable, "-I", "-c", "print('not json')"], **kw))
     with pytest.raises(handle_scan.ScanUnavailable):
-        handle_scan._scan(os.getpid(), False, timeout=30)
+        handle_scan._scan(os.getpid(), False, timeout=120)
 
 
 # --- the worker thread -------------------------------------------------------------------------
@@ -288,11 +338,7 @@ def test_the_worker_thread_files_the_answer(clock, monkeypatch):
     monkeypatch.setattr(handle_scan, "_scan", lambda *a, **k: Scan(("seen.log",), None))
     try:
         assert handle_scan.lookup(31337) is None
-        deadline = time.monotonic() + 10
-        got = None
-        while got is None and time.monotonic() < deadline:
-            time.sleep(0.02)
-            got = handle_scan.lookup(31337)
+        got = wait_until(lambda: handle_scan.lookup(31337), "the worker filed the answer")
         assert got == Scan(("seen.log",), None)
         worker = handle_scan._worker
         assert worker.name == "usage-scan" and worker.daemon

@@ -37,6 +37,8 @@ from port_coordinator import allocate_port
 from secure_ext import SecureClient, device_token
 from browserplug_shared.mcp_port import MCP_PORT_ENV
 from server.server import BrowserPlugServer
+from wait_helper import DEFAULT_TIMEOUT
+from wait_helper import wait_until_async as wait_until
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "launcher" / "launcher.py"
@@ -96,7 +98,7 @@ class LiveServer:
                           "tokenBootstrap": True}}
         self.extension = await SecureClient.connect(
             self.sock, device_token(self.server), hello)
-        await wait_for(lambda: instance_id in self.server.browsers,
+        await wait_until(lambda: instance_id in self.server.browsers,
                        "the hello registering the fake browser")
         self._reader = asyncio.create_task(self._answer_forever())
 
@@ -126,17 +128,10 @@ class LiveServer:
         listener = self.server.lifecycle.websocket_server
         self.server.lifecycle.stop()
         if listener is not None:
-            await asyncio.wait_for(listener.wait_closed(), 10)
+            await asyncio.wait_for(listener.wait_closed(), DEFAULT_TIMEOUT)
         if self.task is not None:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
-
-
-async def wait_for(predicate, what, timeout=10.0):
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        assert time.monotonic() < deadline, f"timed out waiting for {what}"
-        await asyncio.sleep(0.02)
 
 
 @pytest_asyncio.fixture
@@ -148,9 +143,9 @@ async def live_server():
     live = LiveServer(server, ws_port, mcp_port)
     live.task = asyncio.create_task(server.start_server())
     try:
-        await wait_for(lambda: server.lifecycle.websocket_server is not None,
+        await wait_until(lambda: server.lifecycle.websocket_server is not None,
                        "the extension WebSocket listener")
-        await wait_for(lambda: server.lifecycle.mcp_thread is not None
+        await wait_until(lambda: server.lifecycle.mcp_thread is not None
                        and server.lifecycle.mcp_thread.is_alive(), "the MCP HTTP thread")
         assert server.mcp_port == mcp_port, "a relocated MCP port would miss the pin below"
         yield live
@@ -374,20 +369,15 @@ async def test_a_result_holding_a_unicode_line_separator_reaches_the_client_whol
     assert f"Fixture{seps}Page" in text_of(reply), text_of(reply)
 
 
-def forget_server_sessions():
+def forget_server_sessions(live_server):
     """What a /restart does to the MCP sessions: the server no longer knows any of them.
-    Returns the session manager, so a test can count the sessions created afterwards."""
-    import gc
-    import weakref
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    # gc lists every object, dead weakref proxies included, and isinstance() on a proxy whose
-    # referent is gone raises ReferenceError (it reads the proxy's __class__). Proxies are
-    # never the manager, which is the object itself.
-    managers = [o for o in gc.get_objects()
-                if not isinstance(o, weakref.ProxyTypes)
-                and isinstance(o, StreamableHTTPSessionManager) and o._server_instances]
-    assert len(managers) == 1, "expected the one live session manager"
-    manager = managers[0]
+    Returns the session manager, so a test can count the sessions created afterwards.
+
+    The manager is the one the live server's latest http_app() built (the SDK keeps it on
+    the server object, as tests/unit/proxy_doubles.py live_sessions reads it), so no other
+    test's manager can be mistaken for it."""
+    manager = live_server.server.mcp_app.session_manager
+    assert manager._server_instances, "no session to forget: the handshake created none"
     manager._server_instances.clear()
     manager._session_owners.clear()
     return manager
@@ -400,7 +390,7 @@ async def test_two_concurrent_calls_after_a_restart_rebuild_the_session_once(
     with exactly one new session, not an orphan from a second initialize replay."""
     await live_server.attach_extension()
     await relay.handshake()
-    manager = forget_server_sessions()
+    manager = forget_server_sessions(live_server)
     relay.write(call_frame(31, "tabs", {"action": "list"}))
     relay.write(call_frame(32, "tabs", {"action": "list"}))
 

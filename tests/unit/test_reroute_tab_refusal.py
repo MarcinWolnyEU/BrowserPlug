@@ -16,9 +16,10 @@ from mcp_types import CallToolResult, TextContent
 import test_imports  # noqa: F401  (path setup)
 from server.browsers import routing
 from server.tools.tool_outcome import ToolOutcomePolicy
-from test_browser_registry import disconnect, wait_until
+from test_browser_registry import disconnect
 from test_browser_routing import add_browser, as_client, call_browsers, server, tools  # noqa: F401
 from test_routing_notice import run_tabs
+from wait_helper import wait_until_async as wait_until
 
 
 async def run_tool(tools, server, wss, name, **kwargs):

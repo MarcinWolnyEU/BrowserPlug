@@ -43,10 +43,15 @@ def test_probe_never_connects_or_resolves_localhost(monkeypatch):
 
 def test_free_port_probe_is_fast():
     port = _free_port()
-    t = time.monotonic()
+    durations = []
     for _ in range(4):
+        t = time.monotonic()
         assert lifecycle.is_port_in_use(port) is False
-    assert time.monotonic() - t < 0.5
+        durations.append(time.monotonic() - t)
+    # The bug was a ~2 s wait on EVERY call (see the module docstring), so the fastest of
+    # four calls is still about 2 s when it returns, while a descheduled call on a busy
+    # runner cannot move the fastest one past 1 s. A bind test takes microseconds.
+    assert min(durations) < 1.0
 
 
 def test_probe_sees_a_loopback_listener():

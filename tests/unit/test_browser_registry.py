@@ -17,7 +17,6 @@ connected, still alive).
 
 import asyncio
 import json
-import time
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +26,9 @@ from server.browsers.browser_identity import (ExtBrowser, _gecko_dir_cache,
                                               fork_from_browser_info, gecko_variant)
 from brand_probe import gecko_brand
 from server.server import BrowserPlugServer
+from server.ws.ws_auth import AUTH_OFF
+from wait_helper import DEFAULT_TIMEOUT, assert_never_within_async
+from wait_helper import wait_until_async as wait_until
 
 _EOF = object()
 
@@ -46,12 +48,30 @@ class FakeWS:
         self.close_code = None
         self.sent = []
         self._q = asyncio.Queue()
+        self._parked = False    # a reader is blocked on the queue, so it has no frame in hand
+        self._eof_read = False
 
     async def send(self, raw):
         self.sent.append(json.loads(raw))
 
+    async def _next(self):
+        self._parked = True
+        try:
+            item = await self._q.get()
+        finally:
+            self._parked = False
+        if item is _EOF:
+            self._eof_read = True
+        return item
+
+    def settled(self):
+        """True once every fed frame has been read AND the reader is back waiting for the
+        next one (or has seen the end): the handler is done with what the test fed it. The
+        handler reads one frame at a time, so this is the edge a fixed sleep guessed at."""
+        return self._q.empty() and (self._parked or self._eof_read)
+
     async def recv(self):
-        item = await self._q.get()
+        item = await self._next()
         if item is _EOF:
             raise ConnectionError("connection closed")
         return item
@@ -73,7 +93,7 @@ class FakeWS:
         return self
 
     async def __anext__(self):
-        item = await self._q.get()
+        item = await self._next()
         if item is _EOF:
             raise StopAsyncIteration
         return item
@@ -87,21 +107,16 @@ def server(monkeypatch):
     return BrowserPlugServer(host="localhost", port=8772, start_mcp=False)
 
 
-async def wait_until(predicate, what, timeout=2.0, interval=0.01):
-    """Poll `predicate` until it holds — the bounded-poll idiom test_command_timings.py
-    uses, factored out (test_browser_routing.py imports it too).
+async def settled(ws, what, task=None):
+    """Wait until the handler has read every frame fed to `ws` and is waiting for the next
+    (FakeWS.settled), or until its `task` has returned.
 
-    Every use replaces a fixed sleep that was really waiting for an async step to LAND
-    (a send reaching a socket, a close task running). A fixed sleep is a bet that the
-    step finishes inside N ms: it wins on an idle box and silently asserts against
-    half-finished state on a loaded one. This exits the moment the condition is true, and
-    fails naming what never happened rather than letting the assertion below misreport it.
+    Then yield one more loop turn: the handler parks in the same step that schedules any
+    task it started on the way (closing a displaced socket), and that task has not had its
+    first turn yet when the wait sees the handler parked.
     """
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out after {timeout}s waiting until {what}")
-        await asyncio.sleep(interval)
+    await wait_until(lambda: ws.settled() or (task is not None and task.done()), what)
+    await asyncio.sleep(0)
 
 
 async def connect(server, ws, identity=None):
@@ -109,30 +124,31 @@ async def connect(server, ws, identity=None):
     (it is the only psutil dependency). Returns the handler task."""
     with patch.object(server, "_probe_browser_identity", return_value=identity or {}):
         task = asyncio.create_task(server.handle_extension_connection(ws))
-        # Let it register the socket. The peer probe now runs on an executor (finding C7),
-        # so registration takes a thread hop: wait for it instead of guessing a delay.
-        deadline = asyncio.get_running_loop().time() + 2.0
-        while (server.registry.browser_for_ws(ws) is None and not task.done()
-               and asyncio.get_running_loop().time() < deadline):
-            await asyncio.sleep(0.005)
-        await asyncio.sleep(0.01)
+        # Let it register the socket. The peer probe runs on an executor (finding C7), so
+        # registration takes a thread hop: wait for it. Only a socket that registers on
+        # connect (AUTH_OFF) is waited for; a remote peer authenticates first.
+        peer_local = ws.remote_address[0] in ("127.0.0.1", "::1", "localhost")
+        if server.ws_auth.auth_mode(peer_local=peer_local) == AUTH_OFF:
+            await wait_until(
+                lambda: server.registry.browser_for_ws(ws) is not None or task.done(),
+                "the AUTH_OFF socket was registered (or its handler returned)")
+            # Registration can displace an older socket of the same browser; the close it
+            # schedules lands before the handler is back waiting for its first frame.
+            await settled(ws, "the handler finished connecting and waits for a frame",
+                          task=task)
     return task
 
 
 async def hello(server, ws, **fields):
     """Deliver an extension_hello on `ws` (fields are the hello payload, all optional)."""
     ws.feed({"type": "extension_hello", "data": fields})
-    await asyncio.sleep(0.01)
+    await settled(ws, "the handler finished reading the hello")
 
 
 async def hello_processed(ws):
-    """Let the server read a sealed hello and register the browser. A fixed 0.01 s was too
-    short on 3.11: wait for the frame to be consumed, then give the handler a beat."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 5.0
-    while not ws._q.empty() and loop.time() < deadline:
-        await asyncio.sleep(0.01)
-    await asyncio.sleep(0.3)
+    """Let the server read a sealed hello and register the browser: wait until the handler
+    has consumed every frame fed so far and is back waiting for the next."""
+    await settled(ws, "the handler finished reading the sealed hello")
 
 
 async def remote_hello(server, ws, **fields):
@@ -146,7 +162,7 @@ async def remote_hello(server, ws, **fields):
 
 async def disconnect(ws, task):
     ws.drop()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
     await asyncio.sleep(0)  # futures settle on their owning loop's next tick
 
 
@@ -243,7 +259,7 @@ async def test_same_instance_id_displaces_that_browsers_socket(server):
     assert server.extension_connection is new
     assert old.close_code is not None, "the displaced socket must be closed"
 
-    await asyncio.wait_for(old_task, timeout=2.0)
+    await asyncio.wait_for(old_task, timeout=DEFAULT_TIMEOUT)
     assert server.browsers["ff-a"].ws is new, \
         "the displaced handler's cleanup must not tear down its successor"
 
@@ -319,7 +335,7 @@ async def test_a_disconnect_fails_only_that_browsers_in_flight_requests(server):
     assert server.rpc.pending_owners == {"req-b": "ff-b"}
     await server.rpc.handle_response(
         {"id": "req-b", "type": "response", "action": "tabs.list", "data": {"ok": True}})
-    assert (await asyncio.wait_for(call_b, 2.0))["data"] == {"ok": True}
+    assert (await asyncio.wait_for(call_b, DEFAULT_TIMEOUT))["data"] == {"ok": True}
     assert server.rpc.pending_owners == {}
 
     await disconnect(b, b_task)
@@ -346,7 +362,7 @@ async def test_displacement_fails_only_the_displaced_browsers_requests(server):
     assert "displaced" in (await call_a)["error"]
     assert not call_b.done()
 
-    await asyncio.wait_for(a_task, timeout=2.0)
+    await asyncio.wait_for(a_task, timeout=DEFAULT_TIMEOUT)
     await disconnect(a2, a2_task)
     await disconnect(b, b_task)
 
@@ -397,7 +413,7 @@ async def test_old_extension_without_instance_id_falls_back_to_the_browser_pid(s
     assert server.browsers["browser-pid:4242"].slot == 1
     assert server.extension_connection is ws2
 
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=DEFAULT_TIMEOUT)
     await disconnect(ws2, task2)
 
 
@@ -429,7 +445,7 @@ async def test_hello_with_missing_or_junk_fields_degrades(server):
     ws.feed({"type": "extension_hello"})                      # no data at all
     ws.feed({"type": "extension_hello", "data": "nonsense"})  # data of the wrong type
     ws.feed({"type": "extension_hello", "data": {}})          # empty payload
-    await asyncio.sleep(0.02)
+    await settled(ws, "the handler read all three junk hellos")
 
     browser = server.default_browser
     assert browser is not None and browser.provisional is True
@@ -552,19 +568,18 @@ async def test_shutdown_closes_every_browser_socket(server):
     assert "shutting down" in (await call_b)["error"]
     assert a.close_code is not None and b.close_code is not None
 
-    await asyncio.wait_for(a_task, timeout=2.0)
-    await asyncio.wait_for(b_task, timeout=2.0)
+    await asyncio.wait_for(a_task, timeout=DEFAULT_TIMEOUT)
+    await asyncio.wait_for(b_task, timeout=DEFAULT_TIMEOUT)
 
 
 @pytest.mark.asyncio
 async def test_wait_for_extension_connection_means_any_browser(server):
-    waiter = asyncio.create_task(server.wait_for_extension_connection(timeout=2.0))
-    await asyncio.sleep(0.01)
-    assert not waiter.done()
+    waiter = asyncio.create_task(server.wait_for_extension_connection(timeout=DEFAULT_TIMEOUT))
+    await assert_never_within_async(waiter.done, "the waiter returned with no browser", within=0.05)
 
     ws = FakeWS()
     task = await connect(server, ws)
-    assert await asyncio.wait_for(waiter, 1.0) is True
+    assert await asyncio.wait_for(waiter, DEFAULT_TIMEOUT) is True
     # Already connected -> returns immediately.
     assert await server.wait_for_extension_connection(timeout=0.1) is True
 
@@ -758,7 +773,7 @@ async def test_a_second_local_process_cannot_take_over_a_live_instance_id(server
     assert victim.close_code is None, "the live browser's socket was closed"
     assert thief.close_code is not None, "the refused socket must be closed"
 
-    await asyncio.wait_for(thief_task, timeout=2.0)
+    await asyncio.wait_for(thief_task, timeout=DEFAULT_TIMEOUT)
     assert server.browsers["ff-a"].ws is victim
     await disconnect(victim, victim_task)
 
@@ -777,7 +792,7 @@ async def test_a_remote_peer_cannot_take_over_a_local_browsers_instance_id(serve
     assert server.browsers["ff-a"] is record
     assert record.ws is victim
     assert record.is_remote is False
-    await asyncio.wait_for(phone_task, timeout=2.0)
+    await asyncio.wait_for(phone_task, timeout=DEFAULT_TIMEOUT)
     await disconnect(victim, victim_task)
 
 
@@ -801,7 +816,7 @@ async def test_a_remote_device_cannot_take_over_another_devices_live_record(serv
     assert record.ws is not None and record.ws.close_code is None
     assert server.browsers["ff-r"] is record
     assert record.device_label != "another-device"
-    await asyncio.wait_for(other_task, timeout=2.0)
+    await asyncio.wait_for(other_task, timeout=DEFAULT_TIMEOUT)
     await disconnect(owner, owner_task)
 
 
@@ -827,5 +842,5 @@ async def test_the_same_device_may_replace_its_own_live_remote_connection(server
     assert server.browsers["ff-r"] is record
     assert record.ws is not old
     assert record.connect_count == 2
-    await asyncio.wait_for(old_task, timeout=2.0)
+    await asyncio.wait_for(old_task, timeout=DEFAULT_TIMEOUT)
     await disconnect(new, new_task)

@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from browserplug_shared import proc_facts
+from wait_helper import wait_until
 
 WINDOWS = os.name == "nt"
 LINUX = sys.platform.startswith("linux")
@@ -454,10 +455,15 @@ class TestListenerOwner:
 
     def test_reading_the_table_is_fast(self, listening):
         import time
-        started = time.perf_counter()
+        # The fastest of 20 reads, not their mean: one descheduled read on a 3-vCPU runner
+        # moves a mean, while a reader that does slow work on every call (a subprocess per
+        # lookup) is slow on all 20. A read takes about 0.3 ms here.
+        durations = []
         for _ in range(20):
+            started = time.perf_counter()
             proc_facts.pid_owns_listener(os.getpid(), listening)
-        assert (time.perf_counter() - started) / 20 < 0.25
+            durations.append(time.perf_counter() - started)
+        assert min(durations) < 0.25
 
 
 @pytest.mark.skipif(not WINDOWS, reason="the Windows socket table")
@@ -562,12 +568,9 @@ class TestProcNetTcp:
 def test_a_zombie_is_not_alive(sleeper):
     """A child that exited and was not waited for still answers kill(0) and sits in the
     process table; it runs nothing, so it is not alive (wait_gone and the restart tests ask)."""
-    import time
     child = sleeper()
     child.kill()
-    deadline = time.monotonic() + 10
-    while proc_facts.pid_alive(child.pid) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    wait_until(lambda: not proc_facts.pid_alive(child.pid), "the killed child is not alive")
     os.kill(child.pid, 0)                   # still there as a zombie: this raises if reaped
     assert proc_facts.pid_alive(child.pid) is False
     child.wait()

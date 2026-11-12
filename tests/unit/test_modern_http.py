@@ -32,7 +32,8 @@ from server.tools.tool_outcome import EXTENSION_DISCONNECTED
 from server.tools.tool_registry import ToolSpec
 from server.web import http_endpoints, modern_identity, request_context
 from test_list_changed import (NINE, GetStreams, Heard, Roster, http_client, names, reshape,
-                               serving, wait_until)
+                               serving)
+from wait_helper import wait_until_async as wait_until
 
 TOKEN = "a" * 43
 PEER_A = ("127.0.0.1", 41001)
@@ -331,7 +332,9 @@ async def test_one_broadcast_reaches_a_get_stream_client_and_a_listen_client(mon
                 reader = asyncio.create_task(consume())
                 await asyncio.to_thread(reshape, tools, roster, "two browsers")
                 await wait_until(lambda: len(legacy_heard) and listened,
-                                 "both clients told", timeout=3)
+                                 "both clients told")
+                # A quiet period, not a wait: the notices were heard above, and this gives a
+                # duplicate time to show up. A slow machine can miss one, never invent one.
                 await asyncio.sleep(1.0)
                 assert len(legacy_heard) == 1, "the GET-stream client hears it once"
                 assert listened == [ToolsListChanged()], "the listen client hears it once"
@@ -340,7 +343,9 @@ async def test_one_broadcast_reaches_a_get_stream_client_and_a_listen_client(mon
 
                 await asyncio.to_thread(reshape, tools, roster, None)
                 await wait_until(lambda: len(legacy_heard) == 2 and len(listened) == 2,
-                                 "both clients told of the second change", timeout=3)
+                                 "both clients told of the second change")
+                # A quiet period, not a wait: the notices were heard above, and this gives a
+                # duplicate time to show up. A slow machine can miss one, never invent one.
                 await asyncio.sleep(0.5)
                 assert (len(legacy_heard), len(listened)) == (2, 2)
                 reader.cancel()

@@ -160,6 +160,10 @@ class Ticket:
     # Seconds actually spent queued. EXACTLY 0.0 on the fast path; timeout_message keys the
     # byte-identical no-contention string off that, so it must never be a rounding artefact.
     queue_wait: float = 0.0
+    # Whether this request waited in the queue at all, as `_admit` was told. `queue_wait`
+    # cannot answer that: on a coarse clock (Windows monotonic ticks every ~15.6 ms) a
+    # waiter handed a slot in the tick it arrived has a measured wait of exactly 0.0.
+    queued: bool = False
     inflight_on_arrival: int = 0
     queued_on_arrival: int = 0
     # Most requests seen executing at once while THIS one was executing. It is what the
@@ -332,6 +336,7 @@ class BrowserGate:
         now = time.monotonic() if now is None else now
         self._inflight += 1
         ticket.admitted_at = now
+        ticket.queued = queued
         # Exactly 0.0 (not a sub-microsecond measurement) when nothing was waited for, so the
         # no-contention timeout string stays byte-identical to the pre-gate one.
         ticket.queue_wait = max(0.0, now - ticket.enqueued_at) if queued else 0.0

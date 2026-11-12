@@ -19,7 +19,9 @@ import pytest
 import test_imports  # noqa: F401
 from server.server import BrowserPlugServer
 from test_concurrency_gate import a_request, add_browser
-from test_disconnect_retry import FakeWS, connect, hello, wait_until
+from test_disconnect_retry import FakeWS, connect, hello
+from wait_helper import DEFAULT_TIMEOUT
+from wait_helper import wait_until_async as wait_until
 import server.rpc.request_retry as request_retry
 
 
@@ -62,10 +64,10 @@ async def test_retry_after_displacement_does_not_wait_on_its_parents_slot(server
     await connect(server, a2, identity=identity)
     await hello(server, a2, instanceId="ff-x")
 
-    await wait_until(lambda: a2.sent, "the retry reached the new socket", timeout=1.0)
+    await wait_until(lambda: a2.sent, "the retry reached the new socket")
     retry = a2.sent[-1]
     a2.feed({"id": retry["id"], "type": "response", "action": "tabs.list", "data": {"ok": 1}})
-    result = await asyncio.wait_for(call, 2.0)
+    result = await asyncio.wait_for(call, DEFAULT_TIMEOUT)
     assert result.get("data") == {"ok": 1}, result
 
 
@@ -114,7 +116,7 @@ async def test_timeout_slot_is_freed_after_the_grace_if_no_reply_comes(server):
 
     await server.send_request_and_wait(a_request(), timeout=0.05)  # grace = 2 x 0.05
     assert gate.inflight == 1
-    await wait_until(lambda: gate.inflight == 0, "grace expiry", timeout=1.0)
+    await wait_until(lambda: gate.inflight == 0, "grace expiry")
 
 
 @pytest.mark.asyncio

@@ -33,8 +33,9 @@ import test_imports  # noqa: F401  (path setup)
 from server.browsers import routing_notice
 from server.browsers.routing_notice import DepartedBrowser, RoutingMemory
 from server.tools.tool_outcome import ToolOutcomePolicy, fail
-from test_browser_registry import disconnect, wait_until
+from test_browser_registry import disconnect
 from test_browser_routing import add_browser, as_client, call_browsers, server, tools  # noqa: F401
+from wait_helper import wait_until_async as wait_until
 
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDw"
            "AChwGA60e6kgAAAABJRU5ErkJggg==")

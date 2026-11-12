@@ -25,8 +25,8 @@ import pytest
 import test_imports  # noqa: F401
 from server.server import BrowserPlugServer
 from fake_process_table import fake_process_table  # noqa: F401  (autouse)
-from test_browser_registry import (FakeWS, connect, hello, remote_hello, disconnect,
-                                   wait_until)
+from test_browser_registry import FakeWS, connect, hello, remote_hello, disconnect
+from wait_helper import wait_until_async as wait_until
 
 BASE_TOOLS = {
     "tabs", "navigate", "page_read", "page_snapshot", "page_act", "page_eval",

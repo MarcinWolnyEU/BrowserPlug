@@ -16,13 +16,13 @@ starts it. The server is one of two kinds:
     which can be killed and respawned, so `server_pid` moves for real.
 
 The relay polls /health every 3 s and takes its first observation as a baseline, so a test
-that wants a change announced waits one poll period after the launcher starts.
+that wants a change announced waits for that first poll to be answered. The launcher runs under
+POLL_SPY, which says so on stderr; the relay itself logs nothing for a baseline.
 """
 
 import asyncio
 import os
 import sys
-import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -36,13 +36,50 @@ import test_imports  # noqa: F401
 from browserplug_shared import mcp_era
 from browserplug_shared.config_store import STATE_DIR_ENV
 from browserplug_shared.mcp_port import MCP_PORT_ENV
-from launcher.stdio_relay import TOOLS_POLL_SECONDS
 from server.tools.tool_registry import ToolSpec
 from test_e2e_list_changed import attach_second_browser
 from test_e2e_stdio_path import LAUNCHER, LAUNCHER_AS_OURS, ROOT, live_server  # noqa: F401
-from test_list_changed import NINE, Heard, names, wait_until
+from test_list_changed import NINE, Heard, names
 from test_relay_recovery_process import STUB, WRAPPER, kill_server
 from test_server_process_lifecycle import SERVER_SCRIPT, sandbox  # noqa: F401
+from wait_helper import wait_until_async as wait_until
+
+# Runs a launcher script (argv[1:]) with the relay's /health poll reporting each answer on
+# stderr. The relay takes its baseline from the first answered poll and can only announce a
+# change seen after it, so a test that is about to change the tool surface waits for that line.
+# The line is written when health() returns, a few statements before the relay files the
+# answer, and the change a test makes next needs a WebSocket handshake or a server kill.
+POLL_ANSWERED = "poll-spy: /health answered"
+POLL_SPY = """\
+import runpy
+import sys
+
+sys.path[:0] = [{root!r}, {shared!r}]
+from launcher import stdio_relay
+
+health = stdio_relay.StdioRelay.health
+
+
+def answered(self):
+    reply = health(self)
+    print({marker!r}, file=sys.stderr, flush=True)
+    return reply
+
+
+stdio_relay.StdioRelay.health = answered
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+def poll_spy(tmp_path):
+    """The spy script, written once per test directory."""
+    script = tmp_path / "poll_spy.py"
+    if not script.exists():     # a second launcher may be reading it: never rewrite
+        script.write_text(POLL_SPY.format(root=str(ROOT), shared=str(ROOT / "shared-py"),
+                                          marker=POLL_ANSWERED), encoding="utf-8")
+    return script
+
 
 MODERN = "2026-07-28"
 HANDSHAKE = HANDSHAKE_PROTOCOL_VERSIONS[-1]     # what a handshake client ends on: 2025-11-25
@@ -70,28 +107,26 @@ def text_of(result):
 class Launched:
     """An SDK client connected to a launcher subprocess, and what that launcher said on stderr."""
 
-    def __init__(self, client, stderr_path, spawned_at):
+    def __init__(self, client, stderr_path):
         self.client = client
         self.stderr_path = stderr_path
-        self.spawned_at = spawned_at
 
     def stderr(self):
         return Path(self.stderr_path).read_text(encoding="utf-8", errors="replace")
 
     async def after_first_poll(self):
-        """Wait until the relay's watcher has taken its baseline (one poll period in)."""
-        left = self.spawned_at + TOOLS_POLL_SECONDS + 1.5 - time.monotonic()
-        if left > 0:
-            await asyncio.sleep(left)
+        """Wait until the relay's watcher has taken its baseline: its first /health poll was
+        answered (one poll period after it started, and no earlier)."""
+        await wait_until(lambda: POLL_ANSWERED in self.stderr(),
+                         "the relay's first /health poll to be answered", timeout=30)
 
 
 @asynccontextmanager
 async def connected(params, stderr_path, mode="auto", message_handler=None):
-    spawned_at = time.monotonic()
     with open(stderr_path, "w", encoding="utf-8") as errlog:
         async with Client(stdio_client(params, errlog=errlog), mode=mode,
                           message_handler=message_handler) as client:
-            yield Launched(client, stderr_path, spawned_at)
+            yield Launched(client, stderr_path)
 
 
 def fixture_server_params(live, tmp_path, name, relay_era="all"):
@@ -102,7 +137,8 @@ def fixture_server_params(live, tmp_path, name, relay_era="all"):
                 mcp_era.ERA_ENV: relay_era, STATE_DIR_ENV: str(tmp_path / f"state-{name}"),
                 "PYTHONIOENCODING": "utf-8"})
     return StdioServerParameters(command=sys.executable,
-                                 args=[str(LAUNCHER_AS_OURS), str(LAUNCHER)], env=env,
+                                 args=[str(poll_spy(tmp_path)), str(LAUNCHER_AS_OURS),
+                                       str(LAUNCHER)], env=env,
                                  cwd=str(ROOT))
 
 
@@ -174,8 +210,7 @@ async def test_a_modern_and_a_handshake_client_are_both_served_by_the_same_launc
         call.cancel()
         with suppress(asyncio.CancelledError):
             await call
-        await wait_until(lambda: "slow cancelled" in events, "the server to cancel the tool",
-                         timeout=10)
+        await wait_until(lambda: "slow cancelled" in events, "the server to cancel the tool")
         assert "slow finished" not in events
         assert names(await modern.client.list_tools()) == NINE + ["slow"]
 
@@ -187,8 +222,7 @@ async def test_a_modern_and_a_handshake_client_are_both_served_by_the_same_launc
             try:
                 event = await asyncio.wait_for(subscription.__anext__(), 15)
                 assert isinstance(event, ToolsListChanged)
-                await wait_until(lambda: len(heard) == 1, "the handshake client's notice",
-                                 timeout=10)
+                await wait_until(lambda: len(heard) == 1, "the handshake client's notice")
                 assert "browsers" in names(await modern.client.list_tools())
                 assert "browsers" in names(await legacy.client.list_tools())
             finally:
@@ -239,7 +273,8 @@ async def test_a_modern_client_keeps_its_connection_and_its_stream_across_a_serv
     wrapper.write_text(WRAPPER.format(root=str(ROOT), stub=str(stub)))
     env = sandbox.env()
     env.update({MCP_PORT_ENV: str(sandbox.mcp_port), mcp_era.ERA_ENV: "all"})
-    params = StdioServerParameters(command=sys.executable, args=[str(wrapper)], env=env,
+    params = StdioServerParameters(command=sys.executable,
+                                   args=[str(poll_spy(tmp_path)), str(wrapper)], env=env,
                                    cwd=str(ROOT))
     async with connected(params, tmp_path / "restart.stderr") as launched:
         client = launched.client

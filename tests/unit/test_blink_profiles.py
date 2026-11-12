@@ -11,8 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from test_browser_registry import (FakeWS, connect, disconnect, hello, server,  # noqa: F401
-                                   wait_until)
+from test_browser_registry import FakeWS, connect, disconnect, hello, server  # noqa: F401
 from server.browsers.browser_registry import BrowserRegistry
 
 CHROME = {"pid": 7000, "friendly": "Chrome", "engine": "blink", "brand": "Chrome"}

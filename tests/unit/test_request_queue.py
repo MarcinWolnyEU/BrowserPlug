@@ -121,6 +121,7 @@ async def test_idle_acquire_never_awaits():
     ticket = stop.value.value
     assert isinstance(ticket, Ticket)
     assert ticket.queue_wait == 0.0, "the fast path must pin the wait at exactly 0.0"
+    assert ticket.queued is False
     assert ticket.inflight_on_arrival == 0 and ticket.queued_on_arrival == 0
     assert gate.inflight == 1
 
@@ -206,8 +207,8 @@ async def test_a_late_arrival_cannot_take_a_free_slot_past_a_waiter(monkeypatch)
     gate.release(holder)
     await settle()
     assert admitted == ["early", "late"], "both fit now, but in arrival order"
-    gate.release(await asyncio.wait_for(early, 1.0))
-    gate.release(await asyncio.wait_for(late, 1.0))
+    gate.release(await asyncio.wait_for(early, 10.0))
+    gate.release(await asyncio.wait_for(late, 10.0))
     assert gate.inflight == 0
 
 
@@ -224,7 +225,10 @@ async def test_limit_is_enforced_and_the_excess_is_queued_not_dropped():
     assert [o for o in outcomes if o.error] == [], "nothing may fail merely for being Nth"
     assert ext.served == 10
     assert ext.observed_peak <= 3, "the gate must bound what the extension is asked to hold"
-    queued = [o for o in outcomes if o.ticket.queue_wait > 0.0]
+    # `queued` is what the gate recorded when it admitted the request. Counting a measured
+    # wait above zero instead lost a request whenever a queued one was handed its slot
+    # within one tick of the Windows clock (15.6 ms): 1 miscount in 400 runs.
+    queued = [o for o in outcomes if o.ticket.queued]
     assert len(queued) == 7, "10 requests at limit 3 means 3 admitted at once and 7 queued"
     assert gate.inflight == 0 and gate.queued == 0
 
@@ -239,17 +243,26 @@ async def test_queue_wait_does_not_consume_the_execution_budget():
     ext = FakeExtension(latency=0.01, max_parallel=1)
     blocker = await gate.acquire("navigation.navigate")
 
-    budget = 0.12
+    # The execution takes 10 ms, so a budget of 300 ms leaves a stalled loop 290 ms before the
+    # request could time out for a reason other than the one under test.
+    budget = 0.3
     call = asyncio.create_task(drive(gate, ext, timeout=budget))
     await settle()
     assert gate.queued == 1
-    await asyncio.sleep(0.25)  # it sits in the queue for twice its own budget
+    # Taken once the request is queued, so a task that was descheduled before it enqueued
+    # cannot eat into the 100 ms margin below. Hold it until it has outlived its own budget on
+    # the gate's own clock (plus 100 ms for the coarse Windows tick), not for a fixed time
+    # that a slow loop could cut short.
+    began = time.monotonic()
+    while time.monotonic() - began <= budget + 0.1:
+        await asyncio.sleep(0.01)
     gate.release(blocker)
 
-    outcome = await asyncio.wait_for(call, 2.0)
+    outcome = await asyncio.wait_for(call, 10.0)
     assert outcome.error is None, "the caller's timeout must cover EXECUTION, not the wait"
     assert outcome.wall > budget, "and it really did outlive its own budget in wall time"
     assert outcome.ticket.queue_wait > budget
+    assert outcome.ticket.queued is True
     assert outcome.ticket.admitted_at is not None
 
 
@@ -299,7 +312,7 @@ async def test_overflow_is_refused_immediately_and_nothing_is_sent(monkeypatch):
     gate.release(holder)
     await settle()
     for task in waiters:
-        gate.release(await asyncio.wait_for(task, 1.0))
+        gate.release(await asyncio.wait_for(task, 10.0))
         await settle()
     assert gate.inflight == 0
 
@@ -434,7 +447,7 @@ async def test_dose_response_queues_instead_of_dropping(capsys):
             "calls": n,
             "timeouts": sum(1 for o in outcomes if o.timed_out),
             "refusals": sum(1 for o in outcomes if o.rejected),
-            "queued": sum(1 for o in outcomes if o.ticket and o.ticket.queue_wait > 0.0),
+            "queued": sum(1 for o in outcomes if o.ticket and o.ticket.queued),
             "p50": _p50([o.wall for o in outcomes]),
             "p95": sorted(o.wall for o in outcomes)[max(0, math.ceil(n * 0.95) - 1)],
             "peak": ext.observed_peak,
@@ -465,13 +478,11 @@ async def test_dose_response_queues_instead_of_dropping(capsys):
         batches = _batch_of_p50(n)
         assert table[n]["p50"] >= batches * (_LATENCY - _CLOCK_SLOP), \
             f"N={n}: p50 below the {batches}-batch floor — the load did not actually queue"
-    assert table[10]["p50"] > table[5]["p50"] > table[2]["p50"], \
-        "latency must RISE with concurrency; flat latency would mean work was shed"
-    # N=1 vs N=2 are both a single batch (the queued counts above already prove nothing
-    # queued there), so comparing them any more finely than "not dramatically faster" would
-    # be measuring this box's ~15ms timer granularity rather than the gate.
-    assert table[2]["p50"] >= table[1]["p50"] - _LATENCY, \
-        "a second concurrent request must not come back sooner than a solo one"
+    # The floors above rise with N (1, 1, 2 and 3 batches), and that is the claim that latency
+    # rises with concurrency: shed work answers in about one batch, below the N=10 floor.
+    # Comparing one measured p50 with another is left out on purpose. A stall of one batch
+    # (50 ms) in the smaller run inverts the pair on a loaded runner, and the comparison adds
+    # nothing the floors do not already prove.
 
 
 @pytest.mark.asyncio
@@ -543,7 +554,7 @@ async def test_a_gate_follows_the_env_limit_without_a_restart(monkeypatch):
     monkeypatch.setenv("BROWSERPLUG_MAX_CONCURRENT_REQUESTS", "4")
     gate.release(first)  # the release re-reads the limit and drains what now fits
     await settle()
-    gate.release(await asyncio.wait_for(blocked, 1.0))
+    gate.release(await asyncio.wait_for(blocked, 10.0))
     assert gate.inflight == 0
 
 
@@ -564,7 +575,7 @@ async def test_release_is_idempotent():
     await settle()
     assert gate.inflight == 1, "exactly the one waiter got in, not two"
 
-    second = await asyncio.wait_for(queued, 1.0)
+    second = await asyncio.wait_for(queued, 10.0)
     gate.release(second)
     assert gate.inflight == 0 and gate.queued == 0
 
@@ -589,7 +600,7 @@ async def test_a_cancelled_waiter_leaves_no_slot_behind():
 
     gate.release(holder)
     await settle()
-    ticket = await asyncio.wait_for(survivor, 1.0)
+    ticket = await asyncio.wait_for(survivor, 10.0)
     assert gate.inflight == 1
     gate.release(ticket)
     assert gate.inflight == 0
@@ -661,7 +672,7 @@ async def test_concurrency_info_exposes_the_limit_and_the_live_depth():
     for ticket in held:
         gate.release(ticket)
         await settle()
-    gate.release(await asyncio.wait_for(waiting, 1.0))
+    gate.release(await asyncio.wait_for(waiting, 10.0))
     after = concurrency_info(queue)["browsers"]["ff-x"]
     assert after["inflight"] == 0 and after["queued"] == 0
     assert after["admitted"] == 4 and after["queue_wait_max_ms"] >= 0

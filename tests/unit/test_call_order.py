@@ -19,8 +19,9 @@ from server.tools import call_order
 from server.tools.call_order import CallOrder, calls_ahead_of_switch, call_label
 from server.tools.response_hints import stale_tab_text
 from fake_process_table import fake_process_table  # noqa: F401  (autouse)
-from test_browser_registry import disconnect, wait_until
+from test_browser_registry import disconnect
 from test_browser_routing import add_browser, as_client
+from wait_helper import wait_until_async as wait_until
 
 
 # --- the pure lanes ---------------------------------------------------------------

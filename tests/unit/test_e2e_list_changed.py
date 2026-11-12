@@ -28,8 +28,9 @@ from port_coordinator import allocate_port
 from secure_ext import SecureClient, device_token
 from server.server import BrowserPlugServer
 from server.tools.mcp_server import BrowserPlugMCPServer
-from test_e2e_stdio_path import LiveServer, initialize_frame, wait_for
-from test_list_changed import NINE, GetStreams, Heard, http_client, names, wait_until
+from test_e2e_stdio_path import LiveServer, initialize_frame
+from test_list_changed import NINE, GetStreams, Heard, http_client, names
+from wait_helper import wait_until_async as wait_until
 
 NOTICE = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
 
@@ -52,11 +53,11 @@ async def live(monkeypatch):
     running = LiveServer(server, ws_port, mcp_port)
     running.task = asyncio.create_task(server.start_server())
     try:
-        await wait_for(lambda: server.lifecycle.websocket_server is not None,
+        await wait_until(lambda: server.lifecycle.websocket_server is not None,
                        "the extension WebSocket listener")
-        await wait_for(lambda: server.lifecycle.mcp_thread is not None
+        await wait_until(lambda: server.lifecycle.mcp_thread is not None
                        and server.lifecycle.mcp_thread.is_alive(), "the MCP HTTP thread")
-        await wait_for(lambda: apps, "the MCP app")
+        await wait_until(lambda: apps, "the MCP app")
         running.get_streams = apps[0]
         running.url = f"http://127.0.0.1:{mcp_port}/mcp"
         yield running
@@ -70,7 +71,7 @@ async def attach_second_browser(live, instance_id="e2e-ff-2"):
     hello = {"type": "extension_hello",
              "data": {"version": "1.4.0", "instance_id": instance_id, "tokenBootstrap": True}}
     await SecureClient.connect(sock, device_token(live.server), hello)
-    await wait_for(lambda: instance_id in live.server.browsers, "the second browser")
+    await wait_until(lambda: instance_id in live.server.browsers, "the second browser")
     return sock
 
 
@@ -103,7 +104,9 @@ async def test_a_second_browser_reaches_http_clients_as_one_notice_each_way(live
                 second = await attach_second_browser(live)
                 try:
                     await wait_until(lambda: len(legacy_heard) and listened,
-                                     "both clients told of the connect", timeout=3)
+                                     "both clients told of the connect")
+                    # A quiet period, not a wait: the notices were heard above, and this gives a
+                    # duplicate time to show up. A slow machine can miss one, never invent one.
                     await asyncio.sleep(1.0)
                     assert (len(legacy_heard), len(listened)) == (1, 1)
                     assert names(await legacy.list_tools()) == NINE + ["browsers"]
@@ -111,7 +114,9 @@ async def test_a_second_browser_reaches_http_clients_as_one_notice_each_way(live
                 finally:
                     await second.close()
                 await wait_until(lambda: len(legacy_heard) == 2 and len(listened) == 2,
-                                 "both clients told of the leave", timeout=3)
+                                 "both clients told of the leave")
+                # A quiet period, not a wait: the notices were heard above, and this gives a
+                # duplicate time to show up. A slow machine can miss one, never invent one.
                 await asyncio.sleep(1.0)
                 assert (len(legacy_heard), len(listened)) == (2, 2)
                 assert names(await legacy.list_tools()) == NINE
@@ -201,8 +206,8 @@ async def test_the_relay_hears_exactly_its_own_notice(live):
                 await wait_until(lambda: live.get_streams.open == 1, "the GET stream")
                 await wait_until(lambda: relay.polls >= 2, "the relay's /health baseline")
                 second = await attach_second_browser(live)
-                await wait_until(lambda: len(pushed) == 1, "the server's push", timeout=3)
-                assert await out.next(timeout=5) == NOTICE
+                await wait_until(lambda: len(pushed) == 1, "the server's push")
+                assert await out.next(timeout=10) == NOTICE
                 stdin.send({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
                 reply = await out.next()
                 assert reply["id"] == 3
