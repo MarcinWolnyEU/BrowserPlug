@@ -7,8 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { JSDOM } from 'jsdom';
-import { domContentLoaded } from './dom-ready.mjs';
+import { createTestPage } from './dom-ready.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OPTIONS_HTML = readFileSync(path.join(__dirname, '../../extension-gecko/options.html'), 'utf8');
@@ -129,9 +128,7 @@ async function initOptions(opts = {}) {
   // runScripts:"outside-only" binds window.eval/Function to the jsdom realm
   // (so eval'd code sees `document`/`window` globals) WITHOUT executing the
   // page's own <script> tags — we inject options.js ourselves, exactly once.
-  const dom = new JSDOM(OPTIONS_HTML, { pretendToBeVisual: true, runScripts: 'outside-only' });
-  const { window } = dom;
-  const pageReady = domContentLoaded(window);
+  const { window, pageReady } = createTestPage(OPTIONS_HTML);
   if (opts.clampTimeouts) {
     const realSetTimeout = window.setTimeout.bind(window);
     window.setTimeout = (fn, ms, ...args) =>
@@ -160,7 +157,7 @@ async function initOptions(opts = {}) {
   await pageReady;
   await flush();
   await flush();
-  return { dom, window, document: window.document, store: sync.store, local: local.store,
+  return { window, document: window.document, store: sync.store, local: local.store,
            fetches, openPopupCalls, tabsCreated };
 }
 
@@ -613,9 +610,7 @@ test('options: Copy hands out a NEW device token, never this browser\'s own', as
 
 test('options: the token is never handed to the background CONFIG', async () => {
   const token = mintToken();
-  const dom = new JSDOM(OPTIONS_HTML, { pretendToBeVisual: true, runScripts: 'outside-only' });
-  const { window } = dom;
-  const pageReady = domContentLoaded(window);
+  const { window, pageReady } = createTestPage(OPTIONS_HTML);
   const { browser, sync } = makeBrowserMock();
   const messages = [];
   browser.runtime.sendMessage = (msg) => {

@@ -1,15 +1,25 @@
-// jsdom parses a page synchronously but fires DOMContentLoaded itself, one task after
-// `new JSDOM()`; until then readyState is "loading". A harness that dispatched its own
-// event on top ran the page's init twice, so every listener the init registers ran twice
-// too. Call this right after constructing the window, before evaluating the page's
-// scripts, and await the promise instead of dispatching anything.
-export function domContentLoaded(window) {
-  const state = window.document.readyState;
-  if (state !== 'loading') {
-    throw new Error(`DOMContentLoaded already fired (readyState "${state}"): the page's init `
-      + 'would never run. Evaluate the page scripts in the same task as new JSDOM().');
-  }
-  return new Promise((resolve) => {
-    window.document.addEventListener('DOMContentLoaded', resolve, { once: true });
+import { JSDOM } from 'jsdom';
+
+// jsdom 31 can return an interactive document before it fires DOMContentLoaded.
+// Watch the event from before parsing, then evaluate the page scripts before awaiting it.
+export function createTestPage(html) {
+  let loaded = false;
+  let pageReady;
+  const { window } = new JSDOM(html, {
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+    beforeParse(window) {
+      pageReady = new Promise((resolve) => {
+        window.document.addEventListener('DOMContentLoaded', () => {
+          loaded = true;
+          resolve();
+        }, { once: true });
+      });
+    },
   });
+  if (loaded) {
+    window.close();
+    throw new Error('DOMContentLoaded fired before the test could evaluate the page scripts.');
+  }
+  return { window, pageReady };
 }
