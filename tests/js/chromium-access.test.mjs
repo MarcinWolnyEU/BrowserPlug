@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
-import { domContentLoaded } from './dom-ready.mjs';
+import { createTestPage } from './dom-ready.mjs';
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../extension-gecko/popup');
 const read = (f) => readFileSync(path.join(dir, f), 'utf8');
@@ -66,9 +66,7 @@ test('extensionsPageUrl: the browser\'s own scheme, the install\'s own id', () =
 // `definesBrowser` is a Chrome that also defines the `browser` global, as recent ones do.
 async function initPopup({ userScripts = false, chromium = true, encrypted = true,
   userAgent = null, definesBrowser = false, fileAccess = false } = {}) {
-  const dom = new JSDOM(POPUP_HTML, { pretendToBeVisual: true, runScripts: 'outside-only' });
-  const { window } = dom;
-  const pageReady = domContentLoaded(window);
+  const { window, pageReady } = createTestPage(POPUP_HTML);
   if (userAgent) Object.defineProperty(window.navigator, 'userAgent', { value: userAgent });
   const created = [];
   const api = {

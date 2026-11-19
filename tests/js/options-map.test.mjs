@@ -29,8 +29,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { JSDOM } from 'jsdom';
-import { domContentLoaded } from './dom-ready.mjs';
+import { createTestPage } from './dom-ready.mjs';
 import { assertMatchesContract } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -234,9 +233,7 @@ function makeBrowserMock(state) {
 
 // Load the real options.html, run the real options.js, land on the Health tab.
 async function initOptionsOnHealth({ payload = makePayload() } = {}) {
-  const dom = new JSDOM(OPTIONS_HTML, { pretendToBeVisual: true, runScripts: 'outside-only' });
-  const { window } = dom;
-  const pageReady = domContentLoaded(window);
+  const { window, pageReady } = createTestPage(OPTIONS_HTML);
   const state = { payload, connectionsPolls: 0 };
   window.browser = makeBrowserMock(state);
   // /health and the remote-setup probe: a minimal healthy answer is enough.
