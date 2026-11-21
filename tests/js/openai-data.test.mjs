@@ -353,3 +353,21 @@ test('createUsageStore: a history saved before the session trace existed still l
   assert.deepEqual(r.history.map(h => h.session), [3], 'the session trace starts from now');
   assert.equal(r.sessionWindow, undefined, 'no reset_at, no window to draw');
 });
+
+// A plan can report the weekly window alone (the same shape as Anthropic's Ultra). The
+// store must still keep the week's samples and must not invent a session window.
+test('the store handles a weekly-only reading: week sampled, no session window', async () => {
+  const OD = loadModule();
+  const store = OD.createUsageStore({
+    refreshMinutes: 60,
+    fetchUsage: () => Promise.resolve({
+      ok: true, fetchedAt: Date.now(), session: null,
+      weekly: { percent: 12, resetsAt: new Date(Date.now() + 3 * 86400e3).toISOString(), windowName: 'weekly' },
+    }),
+  });
+  const a = await store.get(true);
+  assert.equal(a.session, null);
+  assert.equal(a.sessionWindow, undefined);
+  assert.equal(a.history.length, 0);
+  assert.ok(a.weeklyWindow);
+});

@@ -280,3 +280,40 @@ test('createUsageStore: each account keeps its own samples; signing back in find
   store.clearHistory();
   assert.equal(stored.anthropicUsageHistory, undefined, 'Reset to Defaults clears every account');
 });
+
+// Ultra answers with a weekly limit and no 5-hour window: five_hour is null and limits[]
+// has no `session` entry. The card used to read that as "No usage data yet."
+const ULTRA = {
+  five_hour: null,
+  seven_day: { utilization: 12, resets_at: '2026-11-23T22:00:00.057286+00:00' },
+  limits: [
+    { kind: 'weekly_all', percent: 12, severity: 'normal', resets_at: '2026-11-23T22:00:00.057286+00:00' },
+    { kind: 'weekly_scoped', percent: 5, severity: 'normal', resets_at: '2026-11-23T22:00:00.057477+00:00' },
+  ],
+};
+
+test('parseUsage: a plan with no session window yields weekly only', () => {
+  const AU = loadModule();
+  const { session, weekly } = AU.parseUsage(ULTRA);
+  assert.equal(session, null);
+  assert.equal(weekly.percent, 12);
+});
+
+test('createUsageStore: weekly-only reading still charts the week and has no session window', async (t) => {
+  let clock = Date.parse('2026-11-20T12:00:00Z');
+  t.mock.method(Date, 'now', () => clock);
+  const AU = loadModule();
+  const fakeFetch = async () => ({
+    ok: true, fetchedAt: Date.now(), session: null,
+    weekly: { percent: 12, resetsAt: '2026-11-23T22:00:00Z' },
+  });
+  const store = AU.createUsageStore({ fetchUsage: fakeFetch, refreshMinutes: 60 });
+  await store.get(true);
+  clock += 6 * 60000;
+  const a = await store.get(true);
+  assert.equal(a.session, null);
+  assert.equal(a.sessionWindow, undefined);
+  assert.equal(a.history.length, 0);
+  assert.equal(a.weeklyHistory.length, 2);
+  assert.ok(a.weeklyWindow);
+});

@@ -883,7 +883,7 @@ async function updateConnections() {
       let inlineEl = null;
       if (isClaudeCode(c) && provider.anthropic.mode === 'client') {
         inlineEl = AnthropicView.buildUsageBars(claudeUsage, usageOpts);
-        const hasUsageData = !!(claudeUsage && claudeUsage.session);
+        const hasUsageData = !!(claudeUsage && (claudeUsage.session || claudeUsage.weekly));
         if (inlineEl && hasUsageData) {
           // Clicking the bar toggles an expanded usage chart for this row.
           // Only wired when there IS usage data; a peak-only bar (signed-out
@@ -966,7 +966,7 @@ async function updateConnections() {
     // (claudeUsage.session guard: a {ok:false} fetch failure is truthy but has
     // nothing to graph; don't render an empty chart from a stale toggle.)
     if (isClaudeCode(c) && provider.anthropic.mode === 'client'
-        && claudeUsage && claudeUsage.session && expandedChartKeys.has(key) && AnthropicView.buildUsageChart) {
+        && claudeUsage && (claudeUsage.session || claudeUsage.weekly) && expandedChartKeys.has(key) && AnthropicView.buildUsageChart) {
       li.appendChild(AnthropicView.buildUsageChart(claudeUsage, usageOpts));
     }
 

@@ -55,12 +55,22 @@
   // ---- quotas -----------------------------------------------------------------
 
   // The quota the bar shows. Paid plans meter premium requests and leave chat
-  // unlimited; Copilot Free has no premium quota and meters chat messages instead.
+  // unlimited; Copilot Free has no premium quota and meters chat messages instead. A plan
+  // that caps neither but does cap code completions shows those, so its row still gets a
+  // bar; completions then are the main figure and are not drawn a second time (isPrimary).
   function primaryQuota(usage) {
     if (!usage) return null;
     if (usage.premium && !usage.premium.unlimited) return { name: 'Premium requests', q: usage.premium };
     if (usage.chat && !usage.chat.unlimited) return { name: 'Chat', q: usage.chat };
+    if (usage.completions && !usage.completions.unlimited) return { name: 'Code completions', q: usage.completions };
     return null;
+  }
+
+  // True when `q` is the quota the bar already follows, so a second line or meter for it
+  // would repeat itself.
+  function isPrimary(usage, q) {
+    const p = primaryQuota(usage);
+    return !!p && p.q === q;
   }
 
   // Code completions ride a second half of the bar only when the option asks for it
@@ -68,7 +78,7 @@
   function secondaryQuota(usage, opts) {
     if (!(opts && opts.showCompletions) || !usage) return null;
     const q = usage.completions;
-    return q && !q.unlimited ? { name: 'Code completions', q } : null;
+    return q && !q.unlimited && !isPrimary(usage, q) ? { name: 'Code completions', q } : null;
   }
 
   function quotaLine(name, q) {
@@ -110,7 +120,7 @@
     const lines = [];
     const p = primaryQuota(usage);
     if (p) lines.push(quotaLine(p.name, p.q));
-    if (usage.completions && (opts && opts.showCompletions)) lines.push(quotaLine('Code completions', usage.completions));
+    if (usage.completions && (opts && opts.showCompletions) && !isPrimary(usage, usage.completions)) lines.push(quotaLine('Code completions', usage.completions));
     const left = resetLeft(usage);
     if (left) lines.push(`Monthly quotas reset in ${left}`);
     if (usage.plan) lines.push(`Plan: ${usage.plan}`);
@@ -268,7 +278,7 @@
     if (data && data.ok) {
       const p = primaryQuota(data);
       const now = [p ? quotaLine(p.name, p.q) : null,
-        data.completions ? quotaLine('code completions', data.completions) : null].filter(Boolean).join(', ');
+        data.completions && !isPrimary(data, data.completions) ? quotaLine('code completions', data.completions) : null].filter(Boolean).join(', ');
       const who = `github.com as ${data.login}` + (data.plan ? ` (plan: ${data.plan})` : '');
       if (data.stale) {
         return {
@@ -305,7 +315,7 @@
   }
 
   globalThis.CopilotView = {
-    isCopilotClient, fmtLeft, primaryQuota, secondaryQuota, quotaLine, resetLeft, resetText,
+    isCopilotClient, fmtLeft, primaryQuota, isPrimary, secondaryQuota, quotaLine, resetLeft, resetText,
     accountMismatch, mismatchText, sessionLines, buildSessionBadge,
     buildRowInline, rowSummaryText, makeUsageBar, buildUsageChart, authState,
   };

@@ -67,6 +67,9 @@
   }
 
   // ---- bars ---------------------------------------------------------------
+  // Ultra reports a weekly limit and no 5-hour session, so "has usage" is either one.
+  const hasUsageData = (usage) => !!(usage && (usage.session || usage.weekly));
+
   function usageTooltip(usage, opts) {
     const lines = [];
     const s = usage.session;
@@ -75,7 +78,7 @@
       if (s.resetsAt) l += ` · resets in ${fmtLeft(new Date(s.resetsAt) - Date.now())}`;
       lines.push(l);
     }
-    if (opts && opts.showWeekly && usage.weekly) {
+    if ((!s || (opts && opts.showWeekly)) && usage.weekly) {
       const w = usage.weekly;
       let l = `Weekly ${clampPct(w.percent)}%`;
       if (w.resetsAt) l += ` · resets in ${fmtLeft(new Date(w.resetsAt) - Date.now())}`;
@@ -91,8 +94,9 @@
     const bar = document.createElement('span');
     bar.style.cssText = 'display:inline-block; position:relative; width:38px; height:8px; '
       + 'border-radius:4px; background:#e6e6e6; overflow:hidden; cursor:pointer; vertical-align:middle;';
-    const sPct = clampPct(usage.session.percent);
-    if (opts && opts.showWeekly && usage.weekly) {
+    // No session window (Ultra): the single fill is the weekly figure.
+    const sPct = clampPct((usage.session || usage.weekly).percent);
+    if (usage.session && opts && opts.showWeekly && usage.weekly) {
       const wPct = clampPct(usage.weekly.percent);
       const top = document.createElement('span');
       top.style.cssText = `position:absolute; left:0; top:0; height:4px; width:${sPct}%; background:${pctColor(sPct)};`;
@@ -131,7 +135,7 @@
   // unavailable (e.g. a profile not signed in to claude.ai).
   // Null only when there's neither usage data nor a visible peak window.
   function buildUsageBars(usage, opts) {
-    const hasUsage = !!(usage && usage.session);
+    const hasUsage = hasUsageData(usage);
     const peak = makePeakBar(opts);
     if (!hasUsage && !peak) return null;
     const wrap = document.createElement('span');
@@ -146,12 +150,16 @@
   // and the PEAK part even without usage data (both are panel behavior too).
   function usageSummaryText(usage, opts) {
     const bits = [];
-    if (usage && usage.session) {
-      let s = `session ${clampPct(usage.session.percent)}%`;
-      if (usage.session.resetsAt) s += ` (resets in ${fmtLeft(new Date(usage.session.resetsAt) - Date.now())})`;
-      if (opts && opts.showWeekly && usage.weekly) {
-        s += ` · weekly ${clampPct(usage.weekly.percent)}%`;
-        if (usage.weekly.resetsAt) s += ` (resets in ${fmtLeft(new Date(usage.weekly.resetsAt) - Date.now())})`;
+    if (hasUsageData(usage)) {
+      const weekly = () => `weekly ${clampPct(usage.weekly.percent)}%`
+        + (usage.weekly.resetsAt ? ` (resets in ${fmtLeft(new Date(usage.weekly.resetsAt) - Date.now())})` : '');
+      let s;
+      if (usage.session) {
+        s = `session ${clampPct(usage.session.percent)}%`;
+        if (usage.session.resetsAt) s += ` (resets in ${fmtLeft(new Date(usage.session.resetsAt) - Date.now())})`;
+        if (opts && opts.showWeekly && usage.weekly) s += ` · ${weekly()}`;
+      } else {
+        s = weekly();
       }
       bits.push(s);
     } else if (usage && usage.ok === false) {
@@ -168,7 +176,10 @@
   // renders, with a line saying why there is no chart.
   function buildUsageChart(usage, opts) {
     const UC = globalThis.UsageChart;
-    if (UC) return UC.build(usage, { session: true, weekly: !!(opts && opts.showWeekly) });
+    if (UC) {
+      const hasSession = !!(usage && usage.session);
+      return UC.build(usage, { session: hasSession, weekly: hasSession ? !!(opts && opts.showWeekly) : true });
+    }
     const p = document.createElement('div');
     p.style.cssText = 'font-size:10px; color:var(--text-muted, #999); margin:4px 0;';
     p.textContent = 'Usage chart unavailable (usage-chart.js did not load).';

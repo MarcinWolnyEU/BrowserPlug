@@ -495,3 +495,51 @@ test('a redraw touches only what changed: unchanged nodes, chart included, stay 
     window.close();
   }
 });
+
+// Ultra reports only a weekly limit. The card shows the Week meter, not "No usage data yet."
+test('Anthropic: a weekly-only reading (no 5-hour session) still draws the Week meter', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    const u = usage(0, 12);
+    u.session = null;
+    render({ anthropic: { mode: 'client', usage: u, opts: {} } });
+    const c = cardTitled(host, 'Anthropic');
+    assert.equal(pill(c).textContent, 'signed in');
+    assert.deepEqual(meters(c).map(x => [x.label, x.width]), [['Week', '12%']]);
+    assert.doesNotMatch(c.textContent, /No usage data yet/);
+  } finally {
+    window.close();
+  }
+});
+
+// The same weekly-only shape from OpenAI: a Week meter, not "unavailable".
+test('OpenAI: a weekly-only reading (no 5-hour window) still draws the weekly meter', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    const u = usage(0, 12);
+    u.session = null;
+    u.weekly.windowName = 'weekly';
+    render({ openai: { mode: 'client', usage: u, opts: {} } });
+    const c = cardTitled(host, 'OpenAI');
+    assert.deepEqual(meters(c).map(x => [x.label, x.width]), [['Weekly', '12%']]);
+    assert.doesNotMatch(c.textContent, /unavailable/);
+  } finally {
+    window.close();
+  }
+});
+
+// A plan that caps only code completions: they are the card's one meter, not a main figure
+// plus the same quota again.
+test('GitHub Copilot: completions as the only capped quota draw one meter', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    const usage = copilotUsage();
+    usage.chat = { percent: 0, used: 0, total: 0, unlimited: true };
+    render({ copilot: { mode: 'tab', usage, opts: {}, rows: [] } });
+    const c = cardTitled(host, 'GitHub Copilot');
+    assert.deepEqual(meters(c).map(x => x.label), ['Code completions']);
+    assert.doesNotMatch(c.textContent, /no metered Copilot quota/);
+  } finally {
+    window.close();
+  }
+});

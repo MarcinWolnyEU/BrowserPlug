@@ -191,7 +191,7 @@
       const a = accounts.use(res.accountId);
       const out = Object.assign({}, res);
       out.history = a.history.slice();
-      if (a.windowEnd) out.sessionWindow = { start: a.windowEnd - sessionMs(res), end: a.windowEnd };
+      if (res.session && a.windowEnd) out.sessionWindow = { start: a.windowEnd - sessionMs(res), end: a.windowEnd };
       return a.weekly.attach(out);
     }
 

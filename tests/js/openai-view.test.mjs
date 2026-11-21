@@ -128,3 +128,17 @@ test('a signed-out profile says so, rather than reading as a network fault', () 
   assert.equal(OV.usageSummaryText(out, {}), 'not signed in to chatgpt.com');
   assert.match(OV.usageSummaryText({ ok: false, error: 'HTTP 500' }, {}), /^usage n\/a \(HTTP 500\)$/);
 });
+
+test('a weekly-only reading (no session window) still gets a bar, tooltip and summary', () => {
+  withFakeNow(() => {
+    const OV = loadModule();
+    const u = usage({ session: null });
+    const wrap = OV.buildUsageBars(u, {});
+    assert.ok(wrap, 'a reading with only a weekly window is not "no data"');
+    const bar = wrap.firstChild;
+    assert.equal(bar.firstChild.style.width, '9%', 'the single fill is the weekly figure');
+    assert.match(bar.title, /^Weekly 9%/);
+    assert.match(OV.usageSummaryText(u, {}), /^weekly 9% \(resets in 3d/);
+    assert.equal(OV.buildUsageBars(usage({ session: null, weekly: null }), {}), null, 'neither window: still nothing');
+  });
+});

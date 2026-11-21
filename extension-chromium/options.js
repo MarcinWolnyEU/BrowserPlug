@@ -1386,9 +1386,9 @@ async function refreshAnthropicAuth() {
     const pct = (v) => Math.round(Math.min(100, Math.max(0, Number(v) || 0)));
     const reason = String((data && data.error) || failure || '');
 
-    if (data && data.ok && data.session && !data.stale) {
-        const now = `session ${pct(data.session.percent)}%`
-            + (data.weekly ? `, weekly ${pct(data.weekly.percent)}%` : '');
+    if (data && data.ok && (data.session || data.weekly) && !data.stale) {
+        const now = [data.session && `session ${pct(data.session.percent)}%`,
+            data.weekly && `weekly ${pct(data.weekly.percent)}%`].filter(Boolean).join(', ');
         dot.className = 'token-state-dot ok';
         text.textContent = 'Signed in to claude.ai in this browser.';
         help.textContent = `Your usage is readable (right now: ${now}), so every Claude Code row in the popup's `
@@ -1399,7 +1399,7 @@ async function refreshAnthropicAuth() {
 
     // A stale hit means we still have older numbers cached but the latest refresh
     // failed; the bars keep rendering, they just stop moving. Say exactly that.
-    if (data && data.ok && data.session && data.stale) {
+    if (data && data.ok && (data.session || data.weekly) && data.stale) {
         dot.className = 'token-state-dot warn';
         text.textContent = 'Signed in, but the last refresh failed.';
         help.textContent = `claude.ai did not answer the latest usage fetch (${reason}). The popup keeps showing the `
@@ -1502,9 +1502,9 @@ async function refreshOpenAIAuth() {
     const pct = (v) => Math.round(Math.min(100, Math.max(0, Number(v) || 0)));
     const reason = String((data && data.error) || failure || '');
 
-    if (data && data.ok && data.session && !data.stale) {
-        const now = `${data.session.windowName || 'session'} ${pct(data.session.percent)}%`
-            + (data.weekly ? `, weekly ${pct(data.weekly.percent)}%` : '');
+    if (data && data.ok && (data.session || data.weekly) && !data.stale) {
+        const now = [data.session && `${data.session.windowName || 'session'} ${pct(data.session.percent)}%`,
+            data.weekly && `weekly ${pct(data.weekly.percent)}%`].filter(Boolean).join(', ');
         dot.className = 'token-state-dot ok';
         text.textContent = data.plan
             ? `Signed in to chatgpt.com in this browser (plan: ${data.plan}).`
@@ -1516,7 +1516,7 @@ async function refreshOpenAIAuth() {
 
     // Older numbers cached, latest refresh failed: the bar keeps rendering, it just
     // stops moving. Say exactly that, as the Anthropic block does.
-    if (data && data.ok && data.session && data.stale) {
+    if (data && data.ok && (data.session || data.weekly) && data.stale) {
         dot.className = 'token-state-dot warn';
         text.textContent = 'Signed in, but the last refresh failed.';
         help.textContent = `chatgpt.com did not answer the latest usage read (${reason}). The popup keeps showing `

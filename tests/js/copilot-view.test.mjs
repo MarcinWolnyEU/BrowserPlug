@@ -65,8 +65,15 @@ test('the bar meters premium requests on a paid plan and chat on Copilot Free', 
     premium: { percent: 40, used: 120, total: 300, unlimited: false },
   });
   assert.equal(CV.primaryQuota(paid).name, 'Premium requests');
-  assert.equal(CV.primaryQuota(usage({ chat: { unlimited: true, percent: 0 } })), null,
+  const noChat = { chat: { unlimited: true, percent: 0 } };
+  assert.equal(CV.primaryQuota(usage({ ...noChat, completions: { unlimited: true, percent: 0 } })), null,
     'nothing metered means no bar rather than a bar stuck at 0%');
+  // Only completions capped: they become the bar's figure, once (not again as a second half).
+  const only = usage(noChat);
+  assert.equal(CV.primaryQuota(only).name, 'Code completions');
+  assert.equal(CV.secondaryQuota(only, { showCompletions: true }), null);
+  const bar = CV.buildRowInline(row(SESSION), only, { showCompletions: true }, true).children[0];
+  assert.equal((bar.title.match(/Code completions/g) || []).length, 1, 'one tooltip line for them, not two');
 });
 
 test('matching accounts draw the bar and the session badge', () => {

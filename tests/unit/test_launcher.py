@@ -176,8 +176,10 @@ class TestProxyWiring:
         def lookup(name):
             def answer(root, warn=None, deadline=None):
                 asked.append((name, root))
+                # The slack is for a coarse clock: on Windows two reads can return the
+                # same tick, and 513.796 - 503.796 is 10.000000000000114, not 10.0.
                 assert deadline is not None and 0 < deadline - time.monotonic() <= (
-                    launcher.PROXY_PYTHON_SECONDS)
+                    launcher.PROXY_PYTHON_SECONDS + 0.5)
                 return "env-python"
             return answer
 

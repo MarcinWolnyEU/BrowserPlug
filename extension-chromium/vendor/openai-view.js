@@ -63,7 +63,8 @@
     const lines = [];
     const s = usage.session;
     if (s) lines.push(windowLine(cap(s.windowName || 'session'), s));
-    if (opts && opts.showWeekly && usage.weekly) {
+    // A plan whose reading has no session window (only the weekly one) shows it regardless.
+    if ((!s || (opts && opts.showWeekly)) && usage.weekly) {
       lines.push(windowLine(cap(usage.weekly.windowName || 'weekly'), usage.weekly));
     }
     if (usage.plan) lines.push(`Plan: ${usage.plan}`);
@@ -86,9 +87,10 @@
     const track = usage.limitReached ? '#f7d4d1' : '#e6e6e6';
     bar.style.cssText = 'display:inline-block; position:relative; width:38px; height:8px; '
       + `border-radius:4px; background:${track}; overflow:hidden; cursor:help; vertical-align:middle;`;
-    const sPct = clampPct(usage.session.percent);
+    // No session window: the single fill is the weekly figure.
+    const sPct = clampPct((usage.session || usage.weekly).percent);
     const color = (p) => (usage.limitReached ? '#f44336' : pctColor(p));
-    if (opts && opts.showWeekly && usage.weekly) {
+    if (usage.session && opts && opts.showWeekly && usage.weekly) {
       const wPct = clampPct(usage.weekly.percent);
       const top = document.createElement('span');
       top.style.cssText = `position:absolute; left:0; top:0; height:4px; width:${sPct}%; background:${color(sPct)};`;
@@ -110,7 +112,7 @@
   // if the feature were not there rather than leaving a gap — buildUsageBars()'s
   // contract in anthropic-view.js, kept here.
   function buildUsageBars(usage, opts) {
-    if (!usage || !usage.session) return null;
+    if (!usage || !(usage.session || usage.weekly)) return null;
     const wrap = document.createElement('span');
     wrap.style.cssText = 'display:inline-flex; align-items:center; gap:4px; vertical-align:middle; margin:0 2px;';
     wrap.appendChild(makeUsageBar(usage, opts));
@@ -127,12 +129,16 @@
 
   // Plain-text summary for the right-click copy path (bars don't survive a paste).
   function usageSummaryText(usage, opts) {
-    if (usage && usage.session) {
-      let s = `${usage.session.windowName || 'session'} ${clampPct(usage.session.percent)}%`;
-      if (usage.session.resetsAt) s += ` (resets in ${fmtLeft(new Date(usage.session.resetsAt) - Date.now())})`;
-      if (opts && opts.showWeekly && usage.weekly) {
-        s += ` · weekly ${clampPct(usage.weekly.percent)}%`;
-        if (usage.weekly.resetsAt) s += ` (resets in ${fmtLeft(new Date(usage.weekly.resetsAt) - Date.now())})`;
+    if (usage && (usage.session || usage.weekly)) {
+      const weekly = () => `weekly ${clampPct(usage.weekly.percent)}%`
+        + (usage.weekly.resetsAt ? ` (resets in ${fmtLeft(new Date(usage.weekly.resetsAt) - Date.now())})` : '');
+      let s;
+      if (usage.session) {
+        s = `${usage.session.windowName || 'session'} ${clampPct(usage.session.percent)}%`;
+        if (usage.session.resetsAt) s += ` (resets in ${fmtLeft(new Date(usage.session.resetsAt) - Date.now())})`;
+        if (opts && opts.showWeekly && usage.weekly) s += ` · ${weekly()}`;
+      } else {
+        s = weekly();
       }
       if (usage.limitReached) s += ' · LIMIT REACHED';
       return s;

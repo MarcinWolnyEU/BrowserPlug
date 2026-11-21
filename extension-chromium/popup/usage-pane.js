@@ -103,7 +103,7 @@
       const c = peakLine(card('Anthropic', { tone: 'unknown', text: 'signed out' }), AV, opts);
       return c.querySelector('.meter, .usage-note') ? c : null;
     }
-    if (usage.ok === false || !usage.session) {
+    if (usage.ok === false || !(usage.session || usage.weekly)) {
       const c = card('Anthropic', { tone: 'denied', text: usage.ok === false ? 'unavailable' : 'no data' });
       c.appendChild(note(usage.ok === false
         ? `Account usage unavailable: ${usage.error || 'fetch failed'}. Sign in to claude.ai in this browser profile to restore it.`
@@ -111,15 +111,18 @@
       return peakLine(c, AV, opts);
     }
     const c = card('Anthropic', { tone: 'granted', text: 'signed in' });
-    c.appendChild(meter('Session', usage.session.percent, windowRight(usage.session), heat(usage.session.percent),
-      windowColor('session')));
+    // Ultra has no 5-hour session, only the weekly limit.
+    if (usage.session) {
+      c.appendChild(meter('Session', usage.session.percent, windowRight(usage.session), heat(usage.session.percent),
+        windowColor('session')));
+    }
     if (usage.weekly) {
       c.appendChild(meter('Week', usage.weekly.percent, windowRight(usage.weekly), heat(usage.weekly.percent),
         windowColor('weekly')));
     }
     if (usage.stale) c.appendChild(note('Last refresh failed; these numbers are the previous reading.'));
     peakLine(c, AV, opts);
-    if (AV && AV.buildUsageChart && usage.sessionWindow) {
+    if (AV && AV.buildUsageChart && (usage.sessionWindow || (!usage.session && usage.weeklyWindow))) {
       const chart = AV.buildUsageChart(usage, { showWeekly: !!usage.weekly });
       chart.classList.add('usage-chart');
       c.appendChild(chart);
@@ -151,7 +154,7 @@
       return c;
     }
     if (usage.signedOut) return null;
-    if (usage.ok === false || !usage.session) {
+    if (usage.ok === false || !(usage.session || usage.weekly)) {
       const c = card('OpenAI', { tone: 'denied', text: 'unavailable' });
       const n = note(`Account usage unavailable: ${usage.error || 'fetch failed'}. Sign in at `);
       const a = el('a', null, 'chatgpt.com');
@@ -167,8 +170,11 @@
       ? { tone: 'unknown', text: 'limit reached' }
       : { tone: 'granted', text: usage.plan ? String(usage.plan) : 'signed in' });
     const kind = (pct) => (usage.limitReached ? 'hot' : heat(pct));
-    c.appendChild(meter(cap(usage.session.windowName || 'session'), usage.session.percent,
-      windowRight(usage.session), kind(usage.session.percent), windowColor('session')));
+    // A plan can report the weekly window alone, as Anthropic's Ultra does.
+    if (usage.session) {
+      c.appendChild(meter(cap(usage.session.windowName || 'session'), usage.session.percent,
+        windowRight(usage.session), kind(usage.session.percent), windowColor('session')));
+    }
     if (usage.weekly) {
       c.appendChild(meter(cap(usage.weekly.windowName || 'weekly'), usage.weekly.percent,
         windowRight(usage.weekly), kind(usage.weekly.percent), windowColor('weekly')));
@@ -225,7 +231,7 @@
         : `${clampPct(q.percent)}% · ${q.used} of ${q.total}` + (left ? ` · resets in ${left}` : ''));
       const p = CV.primaryQuota(usage);
       if (p) c.appendChild(meter(p.name, p.q.percent, quotaRight(p.q), heat(p.q.percent), windowColor('monthly')));
-      if (usage.completions) {
+      if (usage.completions && !(p && p.q === usage.completions)) {
         c.appendChild(usage.completions.unlimited
           ? note('Code completions: unlimited.')
           : meter('Code completions', usage.completions.percent, quotaRight(usage.completions),

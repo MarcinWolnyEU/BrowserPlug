@@ -114,16 +114,19 @@
     const ready = accounts.ready;
 
     function record(res) {
-      if (!res || !res.ok || !res.session) return;
+      if (!res || !res.ok || !(res.session || res.weekly)) return;
       const a = accounts.use(res.accountId);
-      const end = res.session.resetsAt ? new Date(res.session.resetsAt).getTime() : null;
-      if (isNewSessionWindow(a.windowEnd, end)) { a.history = []; a.windowEnd = end; }
-      else if (end && !a.windowEnd) a.windowEnd = end;
-      a.history.push({
-        t: res.fetchedAt || Date.now(),
-        session: Number(res.session.percent) || 0,
-      });
-      if (a.history.length > HISTORY_MAX) a.history.splice(0, a.history.length - HISTORY_MAX);
+      // Some plans (Ultra) report only a weekly limit: no 5-hour window at all.
+      if (res.session) {
+        const end = res.session.resetsAt ? new Date(res.session.resetsAt).getTime() : null;
+        if (isNewSessionWindow(a.windowEnd, end)) { a.history = []; a.windowEnd = end; }
+        else if (end && !a.windowEnd) a.windowEnd = end;
+        a.history.push({
+          t: res.fetchedAt || Date.now(),
+          session: Number(res.session.percent) || 0,
+        });
+        if (a.history.length > HISTORY_MAX) a.history.splice(0, a.history.length - HISTORY_MAX);
+      }
       a.weekly.record(res.weekly, res.fetchedAt || Date.now());
       accounts.persist();
     }
@@ -132,7 +135,7 @@
       const a = accounts.use(res.accountId);
       const out = Object.assign({}, res);
       out.history = a.history.slice();
-      if (a.windowEnd) out.sessionWindow = { start: a.windowEnd - SESSION_WINDOW_MS, end: a.windowEnd };
+      if (res.session && a.windowEnd) out.sessionWindow = { start: a.windowEnd - SESSION_WINDOW_MS, end: a.windowEnd };
       a.weekly.attach(out);
       return out;
     }
