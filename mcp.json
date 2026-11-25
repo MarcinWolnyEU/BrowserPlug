@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "browserplug": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--script", "server/launcher.py"],
+      "cwd": "./"
+    },
+    "browserplug-http": {
+      "type": "streamable-http",
+      "url": "http://localhost:2830/mcp"
+    }
+  }
+}

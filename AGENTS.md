@@ -36,6 +36,7 @@ The dev docs (a bare `name.md` in this file means `.tmp/dev-docs/name.md`):
 | `server-operations.md` | repo layout, process pair, `server_env`, `control.py`, restarts, watchdog, logging, state, HTTP endpoints, env vars, version skew |
 | `launcher.md` | stdio relay, deadlines, recovery, spawn and adopt, proxy transport, tool-list refresh |
 | `mcp-clients.md` | client naming; this machine's client registrations |
+| `cursor-plugin.md` | the Cursor plugin: `.cursor-plugin/plugin.json`, root `mcp.json`, launcher entry, unconfirmed points |
 | `ws-token-auth.md` | token auth and bootstrap, hello window, pre-auth limits, HTTP gate, bind panels |
 | `ws-encryption.md` | encrypted extension WebSocket, signed HTTP requests |
 | `predefined-scripts.md` | `page_eval`'s `script_name` mode, samples, tests |

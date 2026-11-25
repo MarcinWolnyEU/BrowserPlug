@@ -1,0 +1,21 @@
+{
+  "name": "browserplug",
+  "description": "Read and control your live, logged-in browser through BrowserPlug.",
+  "author": {
+    "name": "Marcin Wolny"
+  },
+  "homepage": "https://github.com/MarcinWolnyEU/browserplug",
+  "repository": "https://github.com/MarcinWolnyEU/browserplug",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "mcp",
+    "automation",
+    "firefox",
+    "chrome",
+    "screenshots",
+    "web-scraping"
+  ],
+  "logo": "assets/icons/app/icon-512.png",
+  "mcpServers": "mcp.json"
+}
