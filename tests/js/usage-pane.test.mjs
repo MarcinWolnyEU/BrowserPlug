@@ -297,9 +297,10 @@ test('Mistral AI: a Vibe & Studio meter and an API meter, each with its money, p
     render({ mistral: { mode: 'tab', usage: mistralUsage(), opts: {} } });
     const c = cardTitled(host, 'Mistral AI');
     assert.equal(pill(c).textContent, 'Pro', 'the plan, as OpenAI and Copilot show theirs');
-    assert.deepEqual(meters(c).map(m => [m.label, m.right, m.width, m.hot]), [
-      ['Vibe & Studio', '€0.34 of €255 · 0.1% · resets in 5d 1h', '0.13369414333333332%', false],
-      ['API', '€0.00 of €25.50 · 0% · resets in 5d 1h', '0.010619%', false],
+    // jsdom 31's CSSOM rounds a style value to 6 decimals, jsdom 30 kept every digit: compare at 4.
+    assert.deepEqual(meters(c).map(m => [m.label, m.right, `${parseFloat(m.width).toFixed(4)}%`, m.hot]), [
+      ['Vibe & Studio', '€0.34 of €255 · 0.1% · resets in 5d 1h', '0.1337%', false],
+      ['API', '€0.00 of €25.50 · 0% · resets in 5d 1h', '0.0106%', false],
     ]);
     const fills = [...c.querySelectorAll('.meter .fill')].map(f => f.style.background);
     assert.deepEqual(fills, ['rgb(142, 95, 208)', 'rgb(0, 137, 123)'], 'violet monthly, teal for the API line');
