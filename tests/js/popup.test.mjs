@@ -39,6 +39,7 @@ const DEEPSEEK_VIEW = readFileSync(path.join(__dirname, '../../extension-gecko/v
 const POPUP_TABS = readFileSync(path.join(__dirname, '../../extension-gecko/popup/popup-tabs.js'), 'utf8');
 const USAGE_PANE = readFileSync(path.join(__dirname, '../../extension-gecko/popup/usage-pane.js'), 'utf8');
 const COPILOT_VIEW = readFileSync(path.join(__dirname, '../../extension-gecko/vendor/copilot-view.js'), 'utf8');
+const MISTRAL_VIEW = readFileSync(path.join(__dirname, '../../extension-gecko/vendor/mistral-view.js'), 'utf8');
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -845,6 +846,7 @@ test('the Usage pane fetches only once its tab is showing', async () => {
     assert.equal(document.getElementById('pane-usage').hidden, false);
     assert.ok(sent.includes('getClaudeUsage'), 'showing the tab is what triggers the fetch');
     assert.ok(!sent.includes('getOpenAIUsage'), 'OpenAI ships Disabled, and Disabled means no fetch');
+    assert.ok(!sent.includes('getMistralUsage'), 'and so does Mistral');
     const titles = [...document.querySelectorAll('#usagePane .card h2')].map(h => h.textContent);
     assert.deepEqual(titles, ['Anthropic'],
       'Disabled draws no card at all — OpenAI and DeepSeek ship Disabled, so they are simply not here');
@@ -862,7 +864,7 @@ test('the Usage pane fetches only once its tab is showing', async () => {
 test('the Usage tab disappears when every provider is turned off', async () => {
   const allOff = {
     anthropicDisplayMode: 'disabled', openaiDisplayMode: 'disabled', deepseekDisplayMode: 'disabled',
-    copilotDisplayMode: 'disabled',
+    copilotDisplayMode: 'disabled', mistralDisplayMode: 'disabled',
   };
   const { window, document } = await initPopup({
     vendors: [DEEPSEEK_VIEW, POPUP_TABS, USAGE_PANE],
@@ -1205,6 +1207,186 @@ test("Copilot in 'tab' mode: a standing account mismatch still forces a re-read 
     await window.readCopilotUsage();
     await window.readCopilotUsage();
     assert.deepEqual(asked, [false, true], 'the second read should have bypassed the cache');
+  } finally {
+    window.close();
+  }
+});
+
+// --- Mistral Vibe -----------------------------------------------------------------
+// The row shows the Vibe & Studio allowance this browser reads from admin.mistral.ai. The
+// panel ships Disabled, so the first thing pinned is that nothing is asked until it is on.
+const mistralRow = () => ({
+  ...clientRow(), friendly: 'Mistral Vibe', vendor: 'Mistral AI',
+  label: 'Mistral Vibe — c:\\work', cwd: 'c:\\work', pid: 4242, detail: '1 session',
+});
+const mistralReading = (over = {}) => ({
+  ok: true, accountId: 'abc', plan: 'Pro', percent: 0.1337, budget: 255, spent: 0.34, currency: 'EUR',
+  resetsAt: new Date(Date.now() + 5 * 86400e3 + 3600e3 + 60e3).toISOString(),
+  api: { percent: 0.01, budget: 25.5, spent: 0.0026, currency: 'EUR',
+    resetsAt: new Date(Date.now() + 5 * 86400e3 + 3600e3 + 60e3).toISOString() },
+  ...over,
+});
+
+// Answers getMistralUsage with `data` and records every Mistral request made.
+function serveMistralUsage(window, data) {
+  const asked = [];
+  const orig = window.browser.runtime.sendMessage;
+  window.browser.runtime.sendMessage = (msg, cb) => {
+    if (msg.action !== 'getMistralUsage') return orig(msg, cb);
+    asked.push(!!msg.force);
+    const reply = { success: true, data };
+    if (typeof cb === 'function') cb(reply);
+    return Promise.resolve(reply);
+  };
+  return asked;
+}
+const hasBar = (li) => [...li.querySelectorAll('span')].some(s => s.style.width === '38px');
+
+test('a Mistral Vibe row carries the bar below the client, and the copied row says the same', async () => {
+  const row = mistralRow();
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW],
+    storage: { mistralDisplayMode: 'client' },
+    connections: { count: 2, generated_hms: '10:00:03', connections: [serverRow(), row], ...DEAD_FLAGS },
+  });
+  try {
+    const asked = serveMistralUsage(window, mistralReading());
+    await window.updateConnections();
+    const li = document.querySelectorAll('#connList li')[1];
+    assert.ok(hasBar(li), 'the usage bar');
+    assert.match(li.textContent, /· 1 session · since/, 'the bar leads the line, the session count trails it');
+    assert.deepEqual(asked, [false], 'one cached read per poll, not a forced one');
+    assert.match(window.buildConnectionCopyNode(row, {}).textContent,
+      /€0\.34 of €255 · 0\.1% · resets in 5d 1h · 1 session/, 'the Vibe allowance, not the API one');
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral ships Disabled: no request, no bar, nothing in the copied row', async () => {
+  const row = mistralRow();
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW],
+    connections: { count: 2, generated_hms: '10:00:03', connections: [serverRow(), row], ...DEAD_FLAGS },
+  });
+  try {
+    const asked = serveMistralUsage(window, mistralReading());
+    await window.updateConnections();
+    assert.deepEqual(asked, [], 'a Disabled panel contacts nobody');
+    assert.ok(!hasBar(document.querySelectorAll('#connList li')[1]));
+    assert.doesNotMatch(window.buildConnectionCopyNode(row, {}).textContent, /€|signed in to chat.mistral/);
+  } finally {
+    window.close();
+  }
+});
+
+test("Mistral in 'tab' mode: the row stays plain, and the row poll asks nobody", async () => {
+  const row = mistralRow();
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW],
+    storage: { mistralDisplayMode: 'tab' },
+    connections: { count: 2, generated_hms: '10:00:03', connections: [serverRow(), row], ...DEAD_FLAGS },
+  });
+  try {
+    const asked = serveMistralUsage(window, mistralReading());
+    await window.updateConnections();
+    assert.deepEqual(asked, [], 'the Usage tab asks, the row does not');
+    assert.ok(!hasBar(document.querySelectorAll('#connList li')[1]));
+    assert.doesNotMatch(window.buildConnectionCopyNode(row, {}).textContent, /€/);
+  } finally {
+    window.close();
+  }
+});
+
+test('a Mistral Vibe row signed out of chat.mistral.ai says so, on screen and in the copy', async () => {
+  const row = mistralRow();
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW],
+    storage: { mistralDisplayMode: 'client' },
+    connections: { count: 2, generated_hms: '10:00:03', connections: [serverRow(), row], ...DEAD_FLAGS },
+  });
+  try {
+    serveMistralUsage(window, { ok: false, signedOut: true, error: 'not signed in to chat.mistral.ai' });
+    await window.updateConnections();
+    const li = document.querySelectorAll('#connList li')[1];
+    assert.equal(li.querySelector('.conn-na').textContent, 'signed out');
+    assert.ok(!hasBar(li));
+    assert.match(window.buildConnectionCopyNode(row, {}).textContent, /not signed in to chat\.mistral\.ai/);
+  } finally {
+    window.close();
+  }
+});
+
+test('no Mistral Vibe row, no Mistral request: the panel is on but nothing needs it', async () => {
+  const { window } = await initPopup({
+    vendors: [MISTRAL_VIEW],
+    storage: { mistralDisplayMode: 'client' },
+    connections: { count: 2, generated_hms: '10:00:03', connections: [serverRow(), clientRow()], ...DEAD_FLAGS },
+  });
+  try {
+    const asked = serveMistralUsage(window, mistralReading());
+    await window.updateConnections();
+    assert.deepEqual(asked, []);
+  } finally {
+    window.close();
+  }
+});
+
+test("the Usage tab asks for Mistral only when it is on, and draws the card when it is", async () => {
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW, POPUP_TABS, USAGE_PANE],
+    storage: { anthropicDisplayMode: 'disabled', mistralDisplayMode: 'tab' },
+    connections: { count: 1, generated_hms: '10:00:03', connections: [serverRow()], ...DEAD_FLAGS },
+  });
+  try {
+    const asked = serveMistralUsage(window, mistralReading());
+    window.PopupTabs.show('usage');
+    await flush();
+    await flush();
+    assert.deepEqual(asked, [false]);
+    const titles = [...document.querySelectorAll('#usagePane .card h2')].map(h => h.textContent);
+    assert.deepEqual(titles, ['Mistral AI']);
+    assert.match(document.querySelector('#usagePane .meter .lbl span').textContent, /^€0\.34 of €255 · 0\.1% · resets in/);
+  } finally {
+    window.close();
+  }
+});
+
+test('a Disabled Mistral is never asked for from the Usage tab, whatever else is on', async () => {
+  // The Options card promises that Disabled stops the admin.mistral.ai and auth.mistral.ai
+  // requests. The Usage tab polls every 2 s while it is open, so a guard that went missing
+  // would show up as a request on every tick, not as a wrong picture.
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW, DEEPSEEK_VIEW, POPUP_TABS, USAGE_PANE],
+    storage: { anthropicDisplayMode: 'disabled', mistralDisplayMode: 'disabled', deepseekDisplayMode: 'tab' },
+    connections: { count: 1, generated_hms: '10:00:03', connections: [serverRow()], ...DEAD_FLAGS },
+  });
+  try {
+    const asked = serveMistralUsage(window, mistralReading());
+    window.PopupTabs.show('usage');
+    await flush();
+    await flush();
+    await window.updateUsagePane();
+    assert.deepEqual(asked, [], 'a Disabled panel contacts nobody');
+    const titles = [...document.querySelectorAll('#usagePane .card h2')].map(h => h.textContent);
+    assert.deepEqual(titles, ['DeepSeek'], 'the tab is open and populated, just not by Mistral');
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral alone keeps the Usage tab on the strip', async () => {
+  const off = {
+    anthropicDisplayMode: 'disabled', openaiDisplayMode: 'disabled', deepseekDisplayMode: 'disabled',
+    copilotDisplayMode: 'disabled',
+  };
+  const { window, document } = await initPopup({
+    vendors: [MISTRAL_VIEW, POPUP_TABS, USAGE_PANE],
+    storage: { hostname: 'localhost', port: 8772, ...off, mistralDisplayMode: 'tab' },
+  });
+  try {
+    const tab = document.querySelector('.tabs [role="tab"][data-tab="usage"]');
+    assert.equal(tab.hidden, false, 'a provider is on, so the tab stays');
   } finally {
     window.close();
   }

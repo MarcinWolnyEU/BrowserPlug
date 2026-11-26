@@ -30,7 +30,7 @@ With BrowserPlug connected, an MCP client can work in your browser:
 - **Several agents and browsers**: share one server, connect several browsers, pick one per agent
 - **Remote browsers**: connect a browser on another machine, Firefox for Android included
 - **Tor and SOCKS**: route traffic through a SOCKS proxy, BrowserPlug also comes with integrated support for `.onion` sites
-- **Quota panels**: see Claude, Codex and Copilot usage limits next to the agent spending them
+- **Quota panels**: see Claude, Codex, Copilot and Mistral usage limits next to the agent spending them
 
 ## Try it
 
@@ -127,9 +127,9 @@ endpoint answers only local callers. Captured requests show `Cookie`, `Authoriza
 similar headers as `<redacted>`; bodies arrive as sent unless you turn on censoring in Options.
 
 There is no analytics, no account and no BrowserPlug service. The extension's usage panels
-call claude.ai and github.com with your cookies (on by default) and chatgpt.com once you turn
-its panel on; each can be switched off. `proxy="tor"` downloads Tor. [PRIVACY.md](PRIVACY.md)
-lists every host contacted and what is stored where.
+call claude.ai and github.com with your cookies (on by default) and chatgpt.com or
+admin.mistral.ai once you turn its panel on; each can be switched off. `proxy="tor"` downloads
+Tor. [PRIVACY.md](PRIVACY.md) lists every host contacted and what is stored where.
 
 ## Quick start
 

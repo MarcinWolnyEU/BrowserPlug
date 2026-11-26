@@ -21,8 +21,10 @@ const BODY_CENSOR_JS = readFileSync(path.join(__dirname, '../../extension-gecko/
 // ...and the card itself, which options.js only hooks.
 const CENSOR_PANEL_JS = readFileSync(path.join(__dirname, '../../extension-gecko/censor-panel.js'), 'utf8');
 // The Copilot card's sign-in wording; options.html loads it before options.js, and
-// refreshCopilotAuth does nothing without it.
+// refreshCopilotAuth does nothing without it. The Mistral card's wording lives in its view
+// module the same way.
 const COPILOT_VIEW_JS = readFileSync(path.join(__dirname, '../../extension-gecko/vendor/copilot-view.js'), 'utf8');
+const MISTRAL_VIEW_JS = readFileSync(path.join(__dirname, '../../extension-gecko/vendor/mistral-view.js'), 'utf8');
 
 // jsdom has no SubtleCrypto; lend the page Node's, then load ws-crypto.js the way the
 // page's <script> tag would.
@@ -152,6 +154,7 @@ async function initOptions(opts = {}) {
   window.confirm = () => true; // resetToDefaults() guards on confirm()
   loadWsCrypto(window);
   window.eval(COPILOT_VIEW_JS);
+  window.eval(MISTRAL_VIEW_JS);
   if (!opts.noBodyCensor) window.eval(BODY_CENSOR_JS);
   window.eval(CENSOR_PANEL_JS);
   // Indirect eval → options.js runs in global scope; declarations become window
@@ -262,7 +265,7 @@ test('options: the DeepSeek peak lead is its own setting, clamped like the Anthr
 // what this file is really pinning is the spelling of the values and the defaults.
 
 const MODE_SELECTS = ['anthropicDisplayMode', 'openaiDisplayMode', 'copilotDisplayMode',
-  'deepseekDisplayMode'];
+  'mistralDisplayMode', 'deepseekDisplayMode'];
 
 function setSelect(window, id, value) {
   const el = window.document.getElementById(id);
@@ -287,15 +290,30 @@ test('options: every provider card offers the same three display modes', async (
   }
 });
 
-test('options: Anthropic and Copilot default to the row, OpenAI and DeepSeek to off', async () => {
+test('options: Anthropic and Copilot default to the row, OpenAI, Mistral and DeepSeek to off', async () => {
   // OpenAI needs a signed-in chatgpt.com profile, and a panel that can only say "not
-  // signed in" is not a default worth having. DeepSeek's price clock is opt-in.
+  // signed in" is not a default worth having. Mistral is the same, and an update must not
+  // start contacting a third-party site by itself. DeepSeek's price clock is opt-in.
   const { window } = await initOptions();
   try {
     assert.equal(window.document.getElementById('anthropicDisplayMode').value, 'client');
     assert.equal(window.document.getElementById('deepseekDisplayMode').value, 'disabled');
     assert.equal(window.document.getElementById('openaiDisplayMode').value, 'disabled');
     assert.equal(window.document.getElementById('copilotDisplayMode').value, 'client');
+    assert.equal(window.document.getElementById('mistralDisplayMode').value, 'disabled');
+  } finally {
+    window.close();
+  }
+});
+
+test('options: the Mistral AI card sits directly above DeepSeek, right after GitHub Copilot', async () => {
+  const { window } = await initOptions();
+  try {
+    const titles = [...window.document.querySelectorAll('.card h2')].map((h) => h.textContent.trim());
+    const at = titles.indexOf('Mistral AI sessions');
+    assert.ok(at > 0, 'the card is missing from options.html');
+    assert.equal(titles[at - 1], 'GitHub Copilot sessions');
+    assert.equal(titles[at + 1], 'DeepSeek sessions');
   } finally {
     window.close();
   }
@@ -312,6 +330,11 @@ test('options: a display mode persists under the key the popup reads', async () 
     setSelect(window, 'openaiDisplayMode', 'client');
     await flush();
     assert.equal(store.openaiDisplayMode, 'client');
+
+    setSelect(window, 'mistralDisplayMode', 'tab');
+    await flush();
+    assert.equal(store.mistralDisplayMode, 'tab');
+    assert.notEqual(store.copilotDisplayMode, 'tab', 'one card does not move another');
   } finally {
     window.close();
   }
@@ -343,6 +366,15 @@ test('options: turning a panel off hides the settings that only mean something w
     await flush();
     assert.equal(field('openaiShowWeekly').hidden, false);
 
+    for (const id of ['mistralBackgroundRefresh', 'mistralUsageRefreshMinutes']) {
+      assert.equal(field(id).hidden, true, `${id}: Mistral ships disabled`);
+    }
+    setSelect(window, 'mistralDisplayMode', 'client');
+    await flush();
+    for (const id of ['mistralBackgroundRefresh', 'mistralUsageRefreshMinutes']) {
+      assert.equal(field(id).hidden, false, `${id} shows once the card is on`);
+    }
+
     setSelect(window, 'anthropicDisplayMode', 'tab');
     await flush();
     for (const id of ids) {
@@ -372,7 +404,7 @@ test('options: the advanced connection settings sit on one line with no help tex
 test('options: the background query box ships off and persists under the key the background reads', async () => {
   const { window, store } = await initOptions();
   try {
-    for (const id of ['anthropicBackgroundRefresh', 'openaiBackgroundRefresh']) {
+    for (const id of ['anthropicBackgroundRefresh', 'openaiBackgroundRefresh', 'mistralBackgroundRefresh']) {
       assert.equal(window.document.getElementById(id).checked, false, `${id} ships unticked`);
     }
     assert.equal(window.document.getElementById('deepseekBackgroundRefresh'), null,
@@ -411,6 +443,11 @@ test('options: the box label quotes the refresh rate as it is typed', async () =
     copilotField.dispatchEvent(new window.Event('input', { bubbles: true }));
     assert.match(window.document.querySelector('label[for="copilotBackgroundRefresh"]').textContent,
       /every 12 min/, 'the Copilot card is wired the same way');
+    const mistralField = window.document.getElementById('mistralUsageRefreshMinutes');
+    mistralField.value = '30';
+    mistralField.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.match(window.document.querySelector('label[for="mistralBackgroundRefresh"]').textContent,
+      /every 30 min/, 'and so is the Mistral one');
   } finally {
     window.close();
   }
@@ -441,18 +478,51 @@ test('options: the Copilot card saves its box, rate and completions toggle, and 
   }
 });
 
+test('options: the Mistral card saves its box and rate, and greys them when off', async () => {
+  const { window, store } = await initOptions();
+  try {
+    const $ = (id) => window.document.getElementById(id);
+    // It ships Disabled; switch it on, as a user would, before touching what sits under it.
+    setSelect(window, 'mistralDisplayMode', 'client');
+    $('mistralBackgroundRefresh').checked = true;
+    $('mistralBackgroundRefresh').dispatchEvent(new window.Event('change', { bubbles: true }));
+    $('mistralUsageRefreshMinutes').value = '9';
+    $('mistralUsageRefreshMinutes').dispatchEvent(new window.Event('change', { bubbles: true }));
+    await flush();
+    assert.deepEqual([store.mistralDisplayMode, store.mistralBackgroundRefresh, store.mistralUsageRefreshMinutes],
+      ['client', true, 9], 'the keys the background and popup read');
+
+    $('mistralUsageRefreshMinutes').value = '900';
+    $('mistralUsageRefreshMinutes').dispatchEvent(new window.Event('change', { bubbles: true }));
+    await flush();
+    assert.equal(store.mistralUsageRefreshMinutes, 60, 'clamped like the other cards');
+
+    setSelect(window, 'mistralDisplayMode', 'disabled');
+    await flush();
+    assert.equal(store.mistralDisplayMode, 'disabled');
+    for (const id of ['mistralBackgroundRefresh', 'mistralUsageRefreshMinutes']) {
+      assert.equal($(id).disabled, true, id);
+    }
+    assert.notEqual(store.copilotDisplayMode, 'disabled', 'one card does not move another');
+  } finally {
+    window.close();
+  }
+});
+
 test('options: a stored mode this build does not know falls back to the card default', async () => {
   // A value from a newer build, or a hand-edited profile. A select showing nothing is
   // worse than a select showing the shipped answer.
   // The popup falls back to the same defaults (popup.js PROVIDER_MODE_DEFAULTS), so both
   // pages draw the card the same way.
   const { window } = await initOptions({ seed: {
-    anthropicDisplayMode: 'somewhere-else', copilotDisplayMode: 'always', openaiDisplayMode: 'x' } });
+    anthropicDisplayMode: 'somewhere-else', copilotDisplayMode: 'always', openaiDisplayMode: 'x',
+    mistralDisplayMode: 'always' } });
   try {
     const value = (id) => window.document.getElementById(id).value;
     assert.equal(value('anthropicDisplayMode'), 'client', 'Anthropic ships on the row');
     assert.equal(value('copilotDisplayMode'), 'client', 'Copilot ships on the row');
     assert.equal(value('openaiDisplayMode'), 'disabled', 'OpenAI ships off');
+    assert.equal(value('mistralDisplayMode'), 'disabled', 'Mistral ships off');
   } finally {
     window.close();
   }
@@ -2117,7 +2187,7 @@ test('options: without the module the page says so and never overwrites stored p
 // Each card's help text promises that Disabled stops the requests to its site, and the
 // sign-in line is drawn from a forced usage read, which is such a request.
 
-const USAGE_ACTIONS = ['getClaudeUsage', 'getOpenAIUsage', 'getCopilotUsage'];
+const USAGE_ACTIONS = ['getClaudeUsage', 'getOpenAIUsage', 'getCopilotUsage', 'getMistralUsage'];
 
 async function initRecordingUsage(seed) {
   const sent = [];
@@ -2134,11 +2204,14 @@ async function initRecordingUsage(seed) {
 
 test('options: a Disabled provider card sends nothing to its site when the page opens', async () => {
   const { window, document, sent } = await initRecordingUsage({
-    anthropicDisplayMode: 'disabled', openaiDisplayMode: 'disabled', copilotDisplayMode: 'disabled' });
+    anthropicDisplayMode: 'disabled', openaiDisplayMode: 'disabled', copilotDisplayMode: 'disabled',
+    mistralDisplayMode: 'disabled' });
   try {
     assert.deepEqual(sent, [], 'a Disabled card still checked its sign-in');
     assert.match(document.getElementById('copilotAuthText').textContent, /Disabled/);
     assert.equal(document.getElementById('copilotSignIn').hidden, true);
+    assert.match(document.getElementById('mistralAuthText').textContent, /Disabled.*chat\.mistral\.ai/);
+    assert.equal(document.getElementById('mistralSignIn').hidden, true);
 
     setSelect(window, 'copilotDisplayMode', 'tab');
     await flush();
@@ -2147,6 +2220,16 @@ test('options: a Disabled provider card sends nothing to its site when the page 
     document.getElementById('openaiAuthRecheck').click();
     await flush();
     assert.deepEqual(sent, ['getCopilotUsage', 'getOpenAIUsage'], 'Re-check asks whatever the mode');
+
+    setSelect(window, 'mistralDisplayMode', 'client');
+    await flush();
+    assert.deepEqual(sent.slice(2), ['getMistralUsage'], 'switching the Mistral card on checks it, once');
+    setSelect(window, 'mistralDisplayMode', 'disabled');
+    await flush();
+    assert.deepEqual(sent.slice(2), ['getMistralUsage'], 'and switching it off asks nobody');
+    document.getElementById('mistralAuthRecheck').click();
+    await flush();
+    assert.deepEqual(sent.slice(2), ['getMistralUsage', 'getMistralUsage'], 'Re-check asks whatever the mode');
   } finally {
     window.close();
   }
@@ -2157,7 +2240,43 @@ test('options: the cards that ship on check their sign-in when the page opens', 
   try {
     // Exactly once each: the page's init runs once (dom-ready.mjs).
     assert.deepEqual([...sent].sort(), ['getClaudeUsage', 'getCopilotUsage'],
-      'Anthropic and Copilot ship on; OpenAI ships off');
+      'Anthropic and Copilot ship on; OpenAI and Mistral ship off');
+  } finally {
+    window.close();
+  }
+});
+
+test('options: the Mistral sign-in line is painted from one forced read, with a sign-in button when signed out', async () => {
+  const replies = [];
+  const { window, document, tabsCreated } = await initOptions({
+    seed: { mistralDisplayMode: 'tab' },
+    sendMessage: async (msg) => {
+      if (!msg || msg.action !== 'getMistralUsage') return { success: false, error: 'stub' };
+      replies.push(msg);
+      return replies.length === 1
+        ? { success: true, data: { ok: true, plan: 'Pro', percent: 0.1337, budget: 255, spent: 0.34, currency: 'EUR', resetsAt: null,
+          api: { percent: 0.01, budget: 25.5, spent: 0.0026, currency: 'EUR', resetsAt: null } } }
+        : { success: true, data: { ok: false, signedOut: true, error: 'not signed in to chat.mistral.ai' } };
+    },
+  });
+  await flush();
+  try {
+    const text = () => document.getElementById('mistralAuthText').textContent;
+    assert.equal(text(), 'Signed in to chat.mistral.ai in this browser (Pro plan).', 'checked on open: the card is on');
+    assert.deepEqual(replies.map((m) => [m.action, m.force]), [['getMistralUsage', true]], 'a forced read, not the cache');
+    assert.equal(document.getElementById('mistralAuthDot').className, 'token-state-dot ok');
+    assert.match(document.getElementById('mistralAuthHelp').textContent, /Vibe & Studio: €0\.34 of €255 · 0\.1%; API: €0\.00 of €25\.50 · 0%\./);
+    assert.match(document.getElementById('mistralAuthHelp').textContent, /admin\.mistral\.ai shows under Subscription/);
+    assert.equal(document.getElementById('mistralSignIn').hidden, true);
+
+    document.getElementById('mistralAuthRecheck').click();
+    await flush();
+    assert.equal(text(), 'Not signed in to chat.mistral.ai in this browser.');
+    assert.equal(document.getElementById('mistralAuthDot').className, 'token-state-dot warn');
+    const signIn = document.getElementById('mistralSignIn');
+    assert.equal(signIn.hidden, false);
+    signIn.click();
+    assert.deepEqual(tabsCreated.map((t) => t.url), ['https://chat.mistral.ai/']);
   } finally {
     window.close();
   }

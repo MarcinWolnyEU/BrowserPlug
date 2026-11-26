@@ -10,9 +10,9 @@ Brave) and the BrowserPlug server that runs on your own machine.
 - What the extension reads goes to the BrowserPlug server on your computer, which passes it to
   the MCP client you connected (your coding agent, editor or CLI). That client's privacy
   policy governs what happens next.
-- The extension makes a few requests of its own, listed below. Three use your logged-in
-  session (`claude.ai`, `chatgpt.com`, `github.com`) and each has an off switch. The
-  `chatgpt.com` one is off until you turn it on.
+- The extension makes a few requests of its own, listed below. Four use your logged-in
+  session (`claude.ai`, `chatgpt.com`, `github.com`, `admin.mistral.ai`) and each has an off
+  switch. The `chatgpt.com` and `admin.mistral.ai` ones are off until you turn them on.
 - The server downloads and runs the Tor client, but only when a tool call asks for `proxy="tor"`.
 
 ## What the extension can reach
@@ -67,17 +67,18 @@ None goes to the author.
 | `claude.ai` | Claude usage percentages for the Claude Code row (an organization lookup, then usage) | When the popup or Options asks and the cache is older than the refresh interval (5 minutes by default); in the background only if you tick "Query every N min". On by default | Yes |
 | `chatgpt.com` | ChatGPT and Codex limit windows (a short-lived token, then usage) | As for `claude.ai`, after you enable the panel | Yes |
 | `github.com` | Copilot quotas and plan, plus the GitHub login they belong to (two requests), to flag a mismatch with VS Code's account | As for `claude.ai`. On by default | Yes |
+| `admin.mistral.ai`, `auth.mistral.ai` | From `admin.mistral.ai`, the two included Mistral allowances (Vibe & Studio and API: spent, limit, reset date) and your plan name; from `auth.mistral.ai`, your Mistral account id, to keep one usage history per account (three requests). The plan answer is a large organization record (its id, name, domain, roles and more); the extension reads two fields of it, the plan tier and plan code, and discards the rest. The account id answer also holds your email, name and device list; the extension discards them and keeps only the id | As for `claude.ai`, after you enable the panel | Yes |
 | `models.dev` | Readable model and provider names for Kilo, pi and Copilot Chat badges; a public catalog, nothing about you is sent | When a badge needs a name the cache lacks | No |
 | `4.ident.me`, `4.tnedi.me` | Your public IPv4 address, for the Options WAN panel | Each time Options opens while a server answers on this machine and no public address is saved | No |
 | `check-host.net` | Whether `http://<your public address>:<WS port>/reachable` answers from the internet | Whenever the WAN panel is showing and an address is known, and on its Refresh button. A custom check URL in that panel replaces this host | No |
 
-The account requests read usage numbers, plan tier, reset times and, for GitHub, your login,
-never conversations. To stop one, set its card to Disabled under Options ▸ Advanced (Anthropic,
-OpenAI or GitHub Copilot sessions). Disabled stops the request, not just the display, and so
-does signing out of the site in this profile. For `models.dev`, untick Kilo sessions ▸ "Clarify
-model & provider names". The WAN requests have no switch: saving your own public address skips
-`ident.me`, and not opening the WAN panel skips `check-host.net`. The DeepSeek panel is a local
-clock and fetches nothing.
+The account requests read usage numbers, plan tier, reset times and, for GitHub, your login
+and, for Mistral, your plan name and account id, never conversations. To stop one, set its card to Disabled
+under Options ▸ Advanced (Anthropic, OpenAI, GitHub Copilot or Mistral AI sessions). Disabled
+stops the request, not just the display, and so does signing out of the site in this profile.
+For `models.dev`, untick Kilo sessions ▸ "Clarify model & provider names". The WAN requests have
+no switch: saving your own public address skips `ident.me`, and not opening the WAN panel skips
+`check-host.net`. The DeepSeek panel is a local clock and fetches nothing.
 
 ## Connections the server makes
 
@@ -100,8 +101,9 @@ In your browser profile:
   the WAN panel's public address and check URL. No page content.
 - `storage.local`, this device only: the instance id, the device token fetched from your local
   server, cached usage numbers, usage history per account (keyed by claude.ai organization id,
-  ChatGPT account id and GitHub login, up to six accounts per provider), cached model names,
-  proxy routing state, and any sample you paste into the censoring Test box.
+  ChatGPT account id, GitHub login and Mistral account id, up to six accounts per provider; for
+  Mistral, one line per allowance, Vibe & Studio and API),
+  cached model names, proxy routing state, and any sample you paste into the censoring Test box.
 - Memory, until the tab or browser closes: per-tab rings of recent requests, console lines and
   navigations. On Chrome, Edge and Brave a service worker restart clears them.
 

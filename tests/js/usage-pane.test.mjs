@@ -2,8 +2,8 @@
 // the real view modules with a fixed clock. What it pins: one card per provider, a card
 // that says something in EVERY state it is drawn in (waiting, failed, numbers), the
 // meters carrying the percentages the views report, and the peak clocks agreeing with
-// the views' own peakInfo. Two things draw NOTHING: a provider turned off, and an OpenAI
-// or Copilot account this browser is signed out of. A signed-out Anthropic card keeps
+// the views' own peakInfo. Two things draw NOTHING: a provider turned off, and an OpenAI,
+// Copilot or Mistral account this browser is signed out of. A signed-out Anthropic card keeps
 // its peak clock, and Copilot on another GitHub account than the editor draws a card
 // without numbers that says so; popup.js takes the whole tab away when every provider
 // is off. All shared files, so one run covers both trees.
@@ -19,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel) => readFileSync(path.join(__dirname, '../../extension-gecko', rel), 'utf8');
 const POPUP_HTML = read('popup/popup.html');
 const VIEW_FILES = ['vendor/usage-chart.js', 'vendor/anthropic-view.js', 'vendor/openai-view.js', 'vendor/copilot-view.js',
-  'vendor/deepseek-view.js'];
+  'vendor/mistral-view.js', 'vendor/deepseek-view.js'];
 const VIEWS = Object.fromEntries(VIEW_FILES.map(f => [f, read(f)]));
 const PANE_JS = read('popup/usage-pane.js');
 
@@ -60,15 +60,16 @@ const usage = (session, weekly, now = DS_PEAK) => ({
   weekly: weekly == null ? null : { percent: weekly, resetsAt: new Date(now + 3 * 86400e3).toISOString() },
 });
 
-test('one card per provider, in the order Anthropic, OpenAI, GitHub Copilot, DeepSeek', () => {
+test('one card per provider, in the order Anthropic, OpenAI, GitHub Copilot, Mistral AI, DeepSeek', () => {
   const { window, host, render } = load(DS_PEAK);
   try {
     render({ anthropic: { mode: 'client', usage: null, opts: {} },
              openai: { mode: 'client', usage: null, opts: {} },
              copilot: { mode: 'tab', usage: null, opts: {}, rows: [] },
+             mistral: { mode: 'tab', usage: null, opts: {} },
              deepseek: { mode: 'client', opts: {} } });
     assert.deepEqual(cards(host).map(c => c.querySelector('h2').textContent),
-      ['Anthropic', 'OpenAI', 'GitHub Copilot', 'DeepSeek']);
+      ['Anthropic', 'OpenAI', 'GitHub Copilot', 'Mistral AI', 'DeepSeek']);
     for (const c of cards(host)) {
       assert.ok(c.textContent.trim().length > 20, `${c.querySelector('h2').textContent}: a card is never blank`);
     }
@@ -99,6 +100,7 @@ test('every provider off leaves the pane empty, for popup.js to take the tab awa
     render({ anthropic: { mode: 'disabled', usage: null, opts: {} },
              openai: { mode: 'disabled', usage: null, opts: {} },
              copilot: { mode: 'disabled', usage: null, opts: {}, rows: [] },
+             mistral: { mode: 'disabled', usage: mistralUsage(), opts: {} },
              deepseek: { mode: 'disabled', opts: {} } });
     assert.equal(cards(host).length, 0);
   } finally {
@@ -246,12 +248,13 @@ test('GitHub Copilot: a browser on another account than the editor draws a card 
   }
 });
 
-test('signed out draws no card for OpenAI or GitHub Copilot; Anthropic keeps only its peak clock', () => {
+test('signed out draws no card for OpenAI, GitHub Copilot or Mistral; Anthropic keeps only its peak clock', () => {
   const { window, host, render } = load(DS_PEAK);
   try {
     render({ anthropic: { mode: 'client', usage: { ok: false, error: 'HTTP 401', signedOut: true }, opts: {} },
              openai: { mode: 'client', usage: { ok: false, signedOut: true }, opts: {} },
              copilot: { mode: 'tab', usage: { ok: false, signedOut: true }, opts: {}, rows: [copilotRow()] },
+             mistral: { mode: 'tab', usage: { ok: false, signedOut: true }, opts: {} },
              deepseek: { mode: 'client', opts: {} } });
     assert.deepEqual(cards(host).map(c => c.querySelector('h2').textContent), ['Anthropic', 'DeepSeek'],
       'the peak clocks need no account, so they stay');
@@ -272,6 +275,143 @@ test('GitHub Copilot: a failed read (signed in) says so and still lists the VS C
     assert.equal(pill(c).textContent, 'unavailable');
     assert.equal(c.querySelector('a').href, 'https://github.com/login');
     assert.match(c.textContent, /Model: gpt-6-luna/);
+  } finally {
+    window.close();
+  }
+});
+
+// The live reading of 2026-11-26, with the reset five days and a bit after `now`.
+const mistralUsage = (over = {}, now = DS_PEAK) => {
+  const resetsAt = new Date(now + 5 * 86400e3 + 3600e3 + 60e3).toISOString();
+  return {
+    ok: true, accountId: 'abc', plan: 'Pro', percent: 0.13369414333333332, budget: 255, spent: 0.3409, currency: 'EUR',
+    resetsAt,
+    api: { percent: 0.010619, budget: 25.5, spent: 0.0027, currency: 'EUR', resetsAt },
+    ...over,
+  };
+};
+
+test('Mistral AI: a Vibe & Studio meter and an API meter, each with its money, percentage and reset', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    render({ mistral: { mode: 'tab', usage: mistralUsage(), opts: {} } });
+    const c = cardTitled(host, 'Mistral AI');
+    assert.equal(pill(c).textContent, 'Pro', 'the plan, as OpenAI and Copilot show theirs');
+    assert.deepEqual(meters(c).map(m => [m.label, m.right, m.width, m.hot]), [
+      ['Vibe & Studio', '€0.34 of €255 · 0.1% · resets in 5d 1h', '0.13369414333333332%', false],
+      ['API', '€0.00 of €25.50 · 0% · resets in 5d 1h', '0.010619%', false],
+    ]);
+    const fills = [...c.querySelectorAll('.meter .fill')].map(f => f.style.background);
+    assert.deepEqual(fills, ['rgb(142, 95, 208)', 'rgb(0, 137, 123)'], 'violet monthly, teal for the API line');
+    assert.doesNotMatch(c.textContent, /Pay-as-you-go|over/i, 'nothing is wrong, so nothing is added');
+    assert.equal(c.querySelector('svg'), null, 'no chart before a window exists');
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral AI: the pill says "signed in" only while the plan is unknown, and the API meter is optional', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    render({ mistral: { mode: 'tab', usage: mistralUsage({ plan: null, api: null }), opts: {} } });
+    const c = cardTitled(host, 'Mistral AI');
+    assert.equal(pill(c).textContent, 'signed in');
+    assert.deepEqual(meters(c).map(m => m.label), ['Vibe & Studio'], 'no API allowance, no API meter');
+    assert.equal(pill(c).className.includes('granted'), true);
+    render({ mistral: { mode: 'tab', usage: mistralUsage({ plan: 'Team' }), opts: {} } });
+    assert.equal(pill(cardTitled(host, 'Mistral AI')).textContent, 'Team');
+    assert.deepEqual(meters(cardTitled(host, 'Mistral AI')).map(m => m.label), ['Vibe & Studio', 'API']);
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral AI: over an allowance keeps its bar full, goes red and a note names which one', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    render({ mistral: { mode: 'tab', opts: {},
+      usage: mistralUsage({ percent: 121.6, spent: 310.08 }) } });
+    let c = cardTitled(host, 'Mistral AI');
+    assert.equal(pill(c).textContent, 'Pro', 'no "over budget" pill any more');
+    const [vibe, api] = meters(c);
+    assert.equal(vibe.width, '100%', 'clamped, not 121.6%');
+    assert.equal(vibe.hot, true);
+    assert.equal(api.hot, false);
+    assert.match(vibe.right, /^€310\.08 of €255 · 121\.6% · over budget · resets in/);
+    assert.match(c.textContent, /Vibe & Studio is over its included allowance; pay-as-you-go bills the excess\./);
+    assert.doesNotMatch(c.textContent, /API usage is over/);
+
+    const resetsAt = new Date(DS_PEAK + 86400e3).toISOString();
+    render({ mistral: { mode: 'tab', opts: {}, usage: mistralUsage({
+      api: { percent: 130, budget: 25.5, spent: 33.15, currency: 'EUR', resetsAt },
+    }) } });
+    c = cardTitled(host, 'Mistral AI');
+    const [vibe2, api2] = meters(c);
+    assert.deepEqual([vibe2.hot, api2.hot, api2.width], [false, true, '100%']);
+    assert.match(api2.right, /^€33\.15 of €25\.50 · 130% · over budget/);
+    assert.match(c.textContent, /API usage is over its included allowance; pay-as-you-go bills the excess\./);
+    assert.doesNotMatch(c.textContent, /Vibe & Studio is over/);
+    assert.doesNotMatch(c.textContent, /Pay-as-you-go is on/);
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral AI: waiting, failed and stale readings each say something', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    render({ mistral: { mode: 'tab', usage: null, opts: {} } });
+    assert.equal(pill(cardTitled(host, 'Mistral AI')).textContent, 'waiting');
+    assert.match(host.textContent, /Waiting for admin\.mistral\.ai/);
+
+    render({ mistral: { mode: 'tab', usage: { ok: false, error: 'HTTP 500' }, opts: {} } });
+    const c = cardTitled(host, 'Mistral AI');
+    assert.equal(pill(c).textContent, 'unavailable');
+    assert.equal(c.querySelector('a').href, 'https://chat.mistral.ai/');
+    assert.match(c.textContent, /Usage unavailable: HTTP 500/);
+
+    render({ mistral: { mode: 'tab', usage: mistralUsage({ stale: true }), opts: {} } });
+    assert.match(cardTitled(host, 'Mistral AI').textContent, /Last refresh failed; these numbers are the previous reading\./);
+    assert.equal(meters(cardTitled(host, 'Mistral AI')).length, 2, 'the old numbers still show');
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral AI: the chart has a violet Vibe & Studio line and a teal API line on one axis, and the meters wear the same colours', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    const end = DS_PEAK + 5 * 86400e3;
+    const win = { start: end - 30 * 86400e3, end };
+    const usage = mistralUsage({
+      monthlyWindow: win, monthlyHistory: [{ t: DS_PEAK - 3600e3, monthly: 0.1 }, { t: DS_PEAK, monthly: 0.13 }],
+      apiWindow: win, apiHistory: [{ t: DS_PEAK - 3600e3, api: 0.01 }, { t: DS_PEAK, api: 0.011 }],
+    });
+    render({ mistral: { mode: 'tab', usage, opts: {} } });
+    const c = cardTitled(host, 'Mistral AI');
+    assert.deepEqual([...c.querySelectorAll('polyline')].map(p => p.getAttribute('stroke')), ['#8e5fd0', '#00897b']);
+    assert.equal(c.querySelectorAll('.usage-axis').length, 1);
+    const head = c.querySelector('.usage-chart').firstChild.textContent;
+    assert.match(head, /● Vibe & Studio/);
+    assert.match(head, /● API/);
+    assert.doesNotMatch(head, /Code completions/);
+    assert.equal(c.querySelector('.meter .fill').style.background, 'rgb(142, 95, 208)', 'monthly: violet');
+  } finally {
+    window.close();
+  }
+});
+
+test('Mistral AI: a redraw with a new number keeps the card and the meter, and changes the text in place', () => {
+  const { window, host, render } = load(DS_PEAK);
+  try {
+    render({ mistral: { mode: 'tab', usage: mistralUsage(), opts: {} } });
+    const card = cardTitled(host, 'Mistral AI');
+    const fill = card.querySelector('.meter .fill');
+    render({ mistral: { mode: 'tab', usage: mistralUsage({ percent: 40, spent: 102 }), opts: {} } });
+    assert.equal(cardTitled(host, 'Mistral AI'), card);
+    assert.equal(card.querySelector('.meter .fill'), fill);
+    assert.equal(fill.style.width, '40%');
+    assert.match(card.querySelector('.meter .lbl span').textContent, /^€102\.00 of €255 · 40% /);
   } finally {
     window.close();
   }
@@ -324,6 +464,19 @@ test('when every enabled provider is signed out the pane says why instead of goi
     render({ openai: { mode: 'client', usage: { ok: false, signedOut: true }, opts: {} } });
     assert.equal(cards(host).length, 0);
     assert.match(host.textContent, /every enabled provider is signed out in this browser/);
+  } finally {
+    window.close();
+  }
+});
+
+test('a Mistral view module that did not load is reported by name, not as a sign-out', () => {
+  const { window, host, render } = load(DS_PEAK, ['vendor/mistral-view.js']);
+  try {
+    render({ mistral: { mode: 'tab', usage: mistralUsage(), opts: {} },
+             deepseek: { mode: 'client', opts: {} } });
+    assert.deepEqual(cards(host).map(c => c.querySelector('h2').textContent), ['DeepSeek']);
+    assert.match(host.textContent, /The Mistral AI panel did not load/);
+    assert.doesNotMatch(host.textContent, /signed out/);
   } finally {
     window.close();
   }

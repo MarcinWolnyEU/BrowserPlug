@@ -4,10 +4,11 @@
  * Licensed under the MIT License - see LICENSE file for details
  *
  * Loaded in the BACKGROUND page; publishes `PeriodHistory`. A provider's usage store
- * (anthropic-data.js, openai-data.js, copilot-data.js) owns one tracker per quota that
- * resets on a schedule longer than a session (a week; for Copilot a month), feeds it every
- * good reading, and spreads the answer over what it returns, so the popup can draw that
- * quota on an axis of its own period (usage-chart.js) instead of the 5-hour one.
+ * (anthropic-data.js, openai-data.js, copilot-data.js, mistral-data.js) owns one tracker per
+ * quota that resets on a schedule longer than a session (a week; for Copilot and Mistral a
+ * month), feeds it every good reading, and spreads the answer over what it returns, so the
+ * popup can draw that quota on an axis of its own period (usage-chart.js) instead of the
+ * 5-hour one.
  *
  * What the tracker decides is where the CURRENT period begins, because that is the chart's
  * left edge and it is not always `resets_at` minus one period:
@@ -21,10 +22,11 @@
  * `key` names the quota ('weekly', 'monthly'): it is the sample field, the prefix of the
  * `<key>History` / `<key>Window` fields attach() adds, and of the persisted fields.
  *
- * createAccountSet() is the persistence all three stores share. Samples belong to an
- * ACCOUNT (the claude.ai organization, the ChatGPT account id, the github.com login), so
- * each account keeps its own, and signing in as somebody else neither shows their numbers
- * under yours nor loses yours: signing back in finds them where they were.
+ * createAccountSet() is the persistence all four stores share. Samples belong to an
+ * ACCOUNT (the claude.ai organization, the ChatGPT account id, the github.com login, the
+ * Mistral identity id), so each account keeps its own, and signing in as somebody else
+ * neither shows their numbers under yours nor loses yours: signing back in finds them where
+ * they were.
  */
 (function () {
   'use strict';

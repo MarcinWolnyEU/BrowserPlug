@@ -9,9 +9,10 @@
  *   - the session line (blue) spans the 5-hour window; its axis labels read HH:MM;
  *   - the weekly line (green, the plug in the logo) spans the current weekly period, which
  *     period-history.js shortens after a reset granted mid-week; its labels read Day HH:MM.
- *   - the monthly line (violet, GitHub Copilot's quota) spans the current month's period;
- *     its labels read D Mon HH:MM.
- *   - the completions line (teal, Copilot's code-completions quota) rides the same month.
+ *   - the monthly line (violet, GitHub Copilot's quota, Mistral's budget) spans the current
+ *     month's period; its labels read D Mon HH:MM.
+ *   - the completions line (teal) rides the same month: Copilot's code-completions quota, or
+ *     Mistral's API allowance (`completionsLabel` names it).
  * Lines whose windows are the same share ONE axis row and one "now" marker, so Copilot's two
  * quotas do not print the same dates twice.
  * One colour per window length, everywhere: the usage pane paints each meter with the
@@ -71,9 +72,10 @@
    * @param {object} usage  a store's reading: history/sessionWindow, weeklyHistory/weeklyWindow,
    *        monthlyHistory/monthlyWindow, completionsHistory/completionsWindow
    * @param {{session?: boolean, weekly?: boolean, monthly?: boolean, monthlyLabel?: string,
-   *        completions?: boolean}} o  which lines (`monthlyLabel` names the monthly one, which
-   *        is whichever quota the provider charts); the weekly one also needs `usage.weekly`,
-   *        and any is skipped while it has no window yet
+   *        completions?: boolean, completionsLabel?: string}} o  which lines (`monthlyLabel`
+   *        names the monthly one, which is whichever quota the provider charts, and
+   *        `completionsLabel` the teal one, default "Code completions"); the weekly one also
+   *        needs `usage.weekly`, and any is skipped while it has no window yet
    */
   function build(usage, o) {
     o = o || {};
@@ -91,7 +93,7 @@
         Array.isArray(usage.monthlyHistory) ? usage.monthlyHistory : [], 'monthly', MONTHLY_COLOR, dayMonthHhmm));
     }
     if (o.completions && usage) {
-      all.push(seriesOf('Code completions', usage.completionsWindow,
+      all.push(seriesOf(o.completionsLabel || 'Code completions', usage.completionsWindow,
         Array.isArray(usage.completionsHistory) ? usage.completionsHistory : [], 'completions', COMPLETIONS_COLOR,
         dayMonthHhmm));
     }

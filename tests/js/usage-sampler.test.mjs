@@ -215,10 +215,11 @@ function loadBackgroundGlue({ stored, alarms }) {
   assert.ok(start >= 0 && end > start,
     'the provider-usage-settings block was not found in background.js between its anchors');
 
-  const refreshCalls = { anthropic: [], openai: [], copilot: [] };
+  const refreshCalls = { anthropic: [], openai: [], copilot: [], mistral: [] };
+  const sampled = { anthropic: [], openai: [], copilot: [], mistral: [] };
   const store = (key) => ({
     setRefreshMinutes: (m) => refreshCalls[key].push(m),
-    get: () => Promise.resolve(),
+    get: (force) => { sampled[key].push(force); return Promise.resolve(); },
   });
   const changeListeners = [];
   const installedListeners = [];
@@ -240,11 +241,11 @@ function loadBackgroundGlue({ stored, alarms }) {
   };
   // eslint-disable-next-line no-new-func
   const factory = new Function('browser', 'UsageSampler', 'claudeUsageStore', 'openaiUsageStore',
-    'copilotUsageStore', 'console',
+    'copilotUsageStore', 'mistralUsageStore', 'console',
     `${BG_SRC.slice(start, end)}\nreturn { usageSampler, applyUsageSettings };`);
   const out = factory(browser, loadModule(), store('anthropic'), store('openai'), store('copilot'),
-    { warn() {}, error() {} });
-  return { ...out, refreshCalls, changeListeners, installedListeners, writes };
+    store('mistral'), { warn() {}, error() {} });
+  return { ...out, refreshCalls, sampled, changeListeners, installedListeners, writes };
 }
 
 test('background glue: a ticked box reaches the sampler and arms a real alarm', async () => {
@@ -259,6 +260,70 @@ test('background glue: a ticked box reaches the sampler and arms a real alarm', 
   ], 'deleting the usageSampler.apply() call from applyUsageSettings must fail here');
   assert.deepEqual(glue.refreshCalls.anthropic.slice(-1), [9], 'the store still gets its TTL');
   assert.equal(glue.usageSampler.armedPeriod('openai'), null, 'OpenAI ships disabled');
+});
+
+test('background glue: Mistral arms its own clock, and its tick forces a reading of the Mistral store', async () => {
+  const alarms = fakeAlarms();
+  const glue = loadBackgroundGlue({
+    alarms,
+    stored: { mistralDisplayMode: 'tab', mistralBackgroundRefresh: true, mistralUsageRefreshMinutes: 7 },
+  });
+  await glue.applyUsageSettings();
+  assert.deepEqual(alarms.creates, [
+    { name: 'browserplug-usage-mistral', info: { delayInMinutes: 7, periodInMinutes: 7 } },
+  ], 'deleting the Mistral entry from the providers list must fail here');
+  assert.equal(glue.usageSampler.armedPeriod('mistral'), 7);
+  assert.deepEqual(glue.refreshCalls.mistral.slice(-1), [7], 'the store still gets its TTL');
+  alarms.onAlarm.fire('browserplug-usage-mistral');
+  assert.deepEqual(glue.sampled.mistral, [true], 'the tick forces a reading, not a cached one');
+  assert.deepEqual([glue.sampled.anthropic, glue.sampled.openai, glue.sampled.copilot], [[], [], []],
+    'and touches no other provider');
+});
+
+test('background glue: Mistral ships Disabled, so a ticked box alone arms nothing', async () => {
+  // A third-party site must not be contacted by an update, nor by a stray box under Disabled.
+  const alarms = fakeAlarms();
+  const glue = loadBackgroundGlue({ alarms, stored: { mistralBackgroundRefresh: true } });
+  await glue.applyUsageSettings();
+  assert.deepEqual(alarms.creates, []);
+  assert.equal(glue.usageSampler.armedPeriod('mistral'), null);
+  assert.deepEqual(glue.refreshCalls.mistral.slice(-1), [5], 'the store TTL defaults to 5 minutes');
+});
+
+test('background glue: a stored mode this build does not know reads as the card default, as in the popup', async () => {
+  // popup.js and options.js show such a card in its shipped mode. The clock has to agree, or
+  // a card both pages show as Disabled is still polled in the background.
+  const alarms = fakeAlarms();
+  const glue = loadBackgroundGlue({
+    alarms,
+    stored: {
+      mistralDisplayMode: 'always', mistralBackgroundRefresh: true,      // ships disabled
+      openaiDisplayMode: 'somewhere-else', openaiBackgroundRefresh: true, // ships disabled
+      copilotDisplayMode: 42, copilotBackgroundRefresh: true,             // ships on the row
+      anthropicDisplayMode: 'bogus', anthropicBackgroundRefresh: true,    // ships on the row
+    },
+  });
+  await glue.applyUsageSettings();
+  assert.equal(glue.usageSampler.armedPeriod('mistral'), null, 'an unknown Mistral mode armed a clock');
+  assert.equal(glue.usageSampler.armedPeriod('openai'), null, 'an unknown OpenAI mode armed a clock');
+  assert.equal(glue.usageSampler.armedPeriod('copilot'), 5, 'the default is on the row, so the ticked box runs');
+  assert.equal(glue.usageSampler.armedPeriod('anthropic'), 5);
+  assert.deepEqual(alarms.creates.map((c) => c.name).sort(),
+    ['browserplug-usage-anthropic', 'browserplug-usage-copilot']);
+});
+
+test('withKnownModes: only the *DisplayMode keys are read, an unknown value becomes the default, and it returns a copy', () => {
+  const US = loadModule();
+  const defaults = { aDisplayMode: 'client', bDisplayMode: 'disabled', aBackgroundRefresh: false, aUsageRefreshMinutes: 5 };
+  const stored = { aDisplayMode: 'tab', bDisplayMode: 'always', aBackgroundRefresh: true, aUsageRefreshMinutes: 'x' };
+  const out = US.withKnownModes(stored, defaults);
+  assert.deepEqual(out, { aDisplayMode: 'tab', bDisplayMode: 'disabled', aBackgroundRefresh: true, aUsageRefreshMinutes: 'x' });
+  assert.equal(stored.bDisplayMode, 'always', 'the input is not changed');
+  for (const mode of ['disabled', 'tab', 'client']) {
+    assert.equal(US.withKnownModes({ aDisplayMode: mode }, defaults).aDisplayMode, mode, mode);
+  }
+  assert.equal(US.withKnownModes({}, defaults).aDisplayMode, 'client', 'a missing mode is the default');
+  assert.deepEqual(US.withKnownModes({ x: 1 }, undefined), { x: 1 });
 });
 
 test('background glue: a legacy "always" is rewritten once and keeps its clock', async () => {
@@ -286,8 +351,9 @@ test('background glue: the shipped defaults arm no clock, and the listener watch
   assert.ok(glue.changeListeners.length, 'a storage.onChanged listener must be registered');
   const block = BG_SRC.slice(BG_SRC.indexOf('// ---- provider usage settings'),
     BG_SRC.indexOf('// ---- end provider usage settings'));
-  for (const key of ['anthropicDisplayMode', 'openaiDisplayMode', 'copilotDisplayMode',
-    'anthropicBackgroundRefresh', 'openaiBackgroundRefresh', 'copilotBackgroundRefresh']) {
+  for (const key of ['anthropicDisplayMode', 'openaiDisplayMode', 'copilotDisplayMode', 'mistralDisplayMode',
+    'anthropicBackgroundRefresh', 'openaiBackgroundRefresh', 'copilotBackgroundRefresh',
+    'mistralBackgroundRefresh', 'mistralUsageRefreshMinutes']) {
     assert.ok(block.includes(`changes.${key}`),
       `${key} decides whether a clock runs; not watching it leaves a change without effect `
       + 'until the next browser start');
@@ -301,13 +367,14 @@ test('the background, popup and Options mode defaults agree', () => {
   const start = OPTIONS_SRC.indexOf('const PROVIDER_MODE_DEFAULTS = {');
   assert.ok(start >= 0, 'PROVIDER_MODE_DEFAULTS not found in options.js');
   const optionsTable = OPTIONS_SRC.slice(start, OPTIONS_SRC.indexOf('};', start));
-  for (const key of ['anthropicDisplayMode', 'openaiDisplayMode', 'copilotDisplayMode']) {
+  for (const key of ['anthropicDisplayMode', 'openaiDisplayMode', 'copilotDisplayMode',
+    'mistralDisplayMode']) {
     assert.ok(defaultIn(BG_SRC, key), `${key} default not found in background.js`);
     assert.equal(defaultIn(BG_SRC, key), defaultIn(POPUP_SRC, key),
       `${key} default disagrees between background and popup`);
   }
   for (const key of ['anthropicDisplayMode', 'openaiDisplayMode', 'copilotDisplayMode',
-    'deepseekDisplayMode']) {
+    'mistralDisplayMode', 'deepseekDisplayMode']) {
     assert.ok(defaultIn(optionsTable, key), `${key} default not found in options.js`);
     assert.equal(defaultIn(optionsTable, key), defaultIn(POPUP_SRC, key),
       `${key} default disagrees between Options and popup`);

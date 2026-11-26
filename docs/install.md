@@ -208,6 +208,79 @@ environment, or your own terminal. `python server\preflight.py --json` checks th
 before you register; its client-config check may describe another client, so confirm Codex
 with `codex mcp get browserplug` and a tool call.
 
+### pi
+
+pi 0.99 and later has MCP support built in, so there is nothing to install. From a terminal, with
+your paths:
+
+```powershell
+pi mcp add browserplug --exposure direct --env 'BROWSERPLUG_SERVER_PYTHON=C:\Users\YOUR_USERNAME\AppData\Local\browserplug\venv\Scripts\python.exe' -- 'C:\Users\YOUR_USERNAME\AppData\Local\browserplug\venv\Scripts\python.exe' 'C:\path\to\browserplug\server\launcher.py'
+pi mcp list
+```
+
+`add` writes `%USERPROFILE%\.pi\agent\mcp.json` (`~/.pi/agent/mcp.json` elsewhere), replaces an
+entry of the same name and does not connect. `list` does connect: it should print `browserplug:
+connected` with the tool names. Run `/reload` in a session that is already open.
+
+By default pi keeps a server's tools out of the model's tool list, and the model reaches them
+only by writing `codemode` scripts. `--exposure direct` declares the BrowserPlug tools like pi's
+own, which suits a set this small. pi starts a stdio server with your shell's environment plus
+`env`, so `--env` is a convenience here, not a requirement. If you installed the
+`pi-mcp-adapter` extension, it takes over `/mcp` and pi's built-in support is not used in
+sessions; check the connection with `/mcp` inside pi.
+
+### Hermes Agent
+
+Hermes Agent (Nous Research) reads MCP servers from the `mcp_servers` mapping in `config.yaml`,
+in its home folder: `%LOCALAPPDATA%\hermes` on native Windows, `~/.hermes` on macOS, Linux and
+WSL2. Add this, with your paths:
+
+```yaml
+mcp_servers:
+  browserplug:
+    command: 'C:\Users\YOUR_USERNAME\AppData\Local\browserplug\venv\Scripts\python.exe'
+    args: ['C:\path\to\browserplug\server\launcher.py']
+    env:
+      BROWSERPLUG_SERVER_PYTHON: 'C:\Users\YOUR_USERNAME\AppData\Local\browserplug\venv\Scripts\python.exe'
+```
+
+Single quotes keep the backslashes literal. Hermes does not hand your shell environment to a
+stdio server: only a short list (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM`, `SHELL`,
+`TMPDIR` and `XDG_*`) passes, plus what the entry's `env` names. A variable set in your shell
+does not reach the launcher, so the `env` block is the way to deliver the interpreter.
+
+`hermes mcp test browserplug` connects, lists the discovered tools and exits 0 when the
+connection works. Run `/reload-mcp` in a session that is already open. Hermes names the tools
+`mcp_browserplug_<tool>`.
+
+### Mistral Vibe
+
+From a terminal, with your paths:
+
+```powershell
+vibe mcp add browserplug --transport stdio --command 'C:\Users\YOUR_USERNAME\AppData\Local\browserplug\venv\Scripts\python.exe' --arg 'C:\path\to\browserplug\server\launcher.py' --env 'BROWSERPLUG_SERVER_PYTHON=C:\Users\YOUR_USERNAME\AppData\Local\browserplug\venv\Scripts\python.exe'
+```
+
+This appends a `[[mcp_servers]]` table to `config.toml` in Vibe's home folder
+(`%USERPROFILE%\.vibe` on Windows, `~/.vibe` elsewhere; `VIBE_HOME` moves it). You can write the
+same entry by hand:
+
+```toml
+[[mcp_servers]]
+name = "browserplug"
+transport = "stdio"
+command = "C:/Users/YOUR_USERNAME/AppData/Local/browserplug/venv/Scripts/python.exe"
+args = ["C:/path/to/browserplug/server/launcher.py"]
+
+[mcp_servers.env]
+BROWSERPLUG_SERVER_PYTHON = "C:/Users/YOUR_USERNAME/AppData/Local/browserplug/venv/Scripts/python.exe"
+```
+
+Vibe starts a stdio server with a short list of variables (on Windows `PATH`, `USERPROFILE`,
+`APPDATA` and a few more) plus the entry's `env` table, so a variable set in your shell does not
+reach the launcher. Start a new Vibe session and run `/mcp` to see the server; its tools appear
+as `browserplug_<tool>`. `vibe mcp remove browserplug` deletes the entry.
+
 ### Direct HTTP
 
 For a client that only speaks HTTP, or when you start the server yourself:

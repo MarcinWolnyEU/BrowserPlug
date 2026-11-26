@@ -13,8 +13,10 @@ Windows:
 | Claude Code | `%USERPROFILE%\.claude.json` | `mcpServers` | `{"type":"stdio","command":"<python>","args":["<checkout>\\server\\launcher.py"],"env":{"BROWSERPLUG_SERVER_PYTHON":"<python>"}}` |
 | VS Code, GitHub Copilot | `%APPDATA%\Code\User\mcp.json` | `servers` | the same stdio entry |
 | GitLab Duo | `%APPDATA%\GitLab\duo\mcp.json` | `mcpServers` | `{"type":"http","url":"http://localhost:2830/mcp","approvedTools":true}` |
-| pi | `%USERPROFILE%\.pi\agent\mcp.json` | `mcpServers` | `{"url":"http://localhost:2830/mcp","lifecycle":"keep-alive"}` |
+| pi | `%USERPROFILE%\.pi\agent\mcp.json` | `mcpServers` | written by `pi mcp add` ([install.md](install.md#pi)); the HTTP form is `{"url":"http://localhost:2830/mcp","lifecycle":"keep-alive"}` |
 | Codex | `%USERPROFILE%\.codex\config.toml` | `[mcp_servers.browserplug]` | written by `codex mcp add` ([install.md](install.md#codex)) |
+| Mistral Vibe | `%USERPROFILE%\.vibe\config.toml` | `[[mcp_servers]]` | written by `vibe mcp add` ([install.md](install.md#mistral-vibe)) |
+| Hermes Agent | `%LOCALAPPDATA%\hermes\config.yaml` | `mcp_servers` | `command`, `args` and `env` ([install.md](install.md#hermes-agent)) |
 | Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` | the same stdio entry |
 
 On macOS and Linux the files with a different location are these (the others sit in your home
@@ -24,6 +26,7 @@ folder as above, `~/.claude.json` and so on):
 |---|---|---|
 | VS Code, GitHub Copilot | `~/Library/Application Support/Code/User/mcp.json` | `$XDG_CONFIG_HOME/Code/User/mcp.json`, or `~/.config/Code/User/mcp.json` when the variable is unset |
 | GitLab Duo | `~/.gitlab/duo/mcp.json` | `~/.gitlab/duo/mcp.json`; `$XDG_CONFIG_HOME/gitlab/duo/mcp.json` or `$GLAB_CONFIG_DIR/duo/mcp.json` when those variables are set |
+| Hermes Agent | `~/.hermes/config.yaml` | `~/.hermes/config.yaml` |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | none: there is no official Linux build |
 
 The keys and entries are the ones in the Windows table. `%APPDATA%\GitLab\duo` is Windows only.
@@ -31,10 +34,10 @@ Preflight reads Claude Desktop's file only when it already holds a BrowserPlug e
 
 `<python>` is the venv's interpreter ([install.md](install.md#a-venv)), by absolute path. The `env`
 entry hands the same path to the launcher as `BROWSERPLUG_SERVER_PYTHON`, and it has to sit in
-the client's own `env` block: some clients (Codex) start servers with a short list of
-environment variables, so one set in your shell does not reach them. The launcher itself runs
-on any Python 3.10 or later. On macOS and the BSDs, register the venv's interpreter or
-`uv run --script`, not a bare interpreter.
+the client's own `env` block: some clients (Codex, Hermes Agent, Mistral Vibe) start servers
+with a short list of environment variables, so one set in your shell does not reach them. The
+launcher itself runs on any Python 3.10 or later. On macOS and the BSDs, register the venv's
+interpreter or `uv run --script`, not a bare interpreter.
 
 With uv installed you can skip the venv and the variable, and the launcher registers one of
 two ways:

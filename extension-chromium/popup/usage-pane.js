@@ -3,16 +3,16 @@
  * Copyright 2026 Marcin Wolny
  * Licensed under the MIT License - see LICENSE file for details
  *
- * One card per provider (Anthropic, OpenAI, GitHub Copilot, DeepSeek), each with the
- * whole width the 38px bars on the client rows never had: a meter per window with its
- * reset time, the peak-hours clock, and Anthropic's usage-since-reset chart. Every
- * number comes from the provider's own view module (anthropic-view.js, openai-view.js,
- * copilot-view.js, deepseek-view.js), the same code that draws the row bars, so the two
- * places cannot disagree.
+ * One card per provider (Anthropic, OpenAI, GitHub Copilot, Mistral AI, DeepSeek), each
+ * with the whole width the 38px bars on the client rows never had: a meter per window
+ * with its reset time, the peak-hours clock, and Anthropic's usage-since-reset chart.
+ * Every number comes from the provider's own view module (anthropic-view.js,
+ * openai-view.js, copilot-view.js, mistral-view.js, deepseek-view.js), the same code that
+ * draws the row bars, so the two places cannot disagree.
  *
  * A card says something in every state it is DRAWN in — a pane the user opened on
  * purpose cannot show an empty box. Two things draw no card: a provider turned off, and
- * an OpenAI or Copilot account this browser is signed out of. A signed-out Anthropic card
+ * an OpenAI, Copilot or Mistral account this browser is signed out of. A signed-out Anthropic card
  * keeps only the peak-hours clock, which is local math and needs no account. Copilot on a
  * different GitHub account than the editor draws a card without numbers (they would be
  * someone else's) that says which account to switch to. In 'tab' mode nothing on the
@@ -256,6 +256,57 @@
     return c;
   }
 
+  // ---- Mistral AI -----------------------------------------------------------------
+  // One meter per included allowance, Vibe & Studio and API, from the same text the row
+  // tooltip uses; the pill names the plan ("Pro") once the reading has it. Over budget
+  // (pay-as-you-go) the bar stays full, turns red, and a note says which allowance it is.
+  function mistralCard(s) {
+    const MV = view('MistralView');
+    if (!MV) return MISSING;
+    const usage = s.usage;
+    if (!usage) {
+      const c = card('Mistral AI', { tone: 'unknown', text: 'waiting' });
+      c.appendChild(note('Waiting for admin.mistral.ai… the first reading arrives with the next refresh.'));
+      return c;
+    }
+    if (usage.signedOut) return null;
+    if (usage.ok === false) {
+      const c = card('Mistral AI', { tone: 'denied', text: 'unavailable' });
+      const n = note(`Usage unavailable: ${usage.error || 'fetch failed'}. Sign in at `);
+      const a = el('a', null, 'chat.mistral.ai');
+      a.href = 'https://chat.mistral.ai/';
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      n.appendChild(a);
+      n.appendChild(document.createTextNode(' in this browser to see the included allowances here.'));
+      c.appendChild(n);
+      return c;
+    }
+    const c = card('Mistral AI', { tone: 'granted', text: usage.plan ? String(usage.plan) : 'signed in' });
+    const allowances = [
+      { name: 'Vibe & Studio', a: usage, color: 'monthly' },
+      { name: 'API', a: usage.api, color: 'completions' },
+    ];
+    for (const { name, a, color } of allowances) {
+      if (!a) continue;
+      const over = MV.overBudget(a);
+      c.appendChild(meter(name, a.percent, MV.usageText(a), over ? 'hot' : heat(a.percent), windowColor(color)));
+    }
+    if (MV.overBudget(usage)) {
+      c.appendChild(note('Vibe & Studio is over its included allowance; pay-as-you-go bills the excess.'));
+    }
+    if (usage.api && MV.overBudget(usage.api)) {
+      c.appendChild(note('API usage is over its included allowance; pay-as-you-go bills the excess.'));
+    }
+    const chart = MV.buildUsageChart ? MV.buildUsageChart(usage) : null;
+    if (chart) {
+      chart.classList.add('usage-chart');
+      c.appendChild(chart);
+    }
+    if (usage.stale) c.appendChild(note('Last refresh failed; these numbers are the previous reading.'));
+    return c;
+  }
+
   // ---- DeepSeek -----------------------------------------------------------------
   function deepseekCard(s) {
     const DV = view('DeepSeekView');
@@ -280,9 +331,13 @@
   }
 
   const BUILDERS = {
-    anthropic: anthropicCard, openai: openaiCard, copilot: copilotCard, deepseek: deepseekCard,
+    anthropic: anthropicCard, openai: openaiCard, copilot: copilotCard, mistral: mistralCard,
+    deepseek: deepseekCard,
   };
-  const NAMES = { anthropic: 'Anthropic', openai: 'OpenAI', copilot: 'GitHub Copilot', deepseek: 'DeepSeek' };
+  const NAMES = {
+    anthropic: 'Anthropic', openai: 'OpenAI', copilot: 'GitHub Copilot', mistral: 'Mistral AI',
+    deepseek: 'DeepSeek',
+  };
 
   // ---- targeted update ----------------------------------------------------------
   // The pane is redrawn every couple of seconds, and nearly all of it is the same each time:
@@ -324,7 +379,8 @@
    *
    * @param {HTMLElement} host
    * @param {object} state  { anthropic: {mode, usage, opts}, openai: {mode, usage, opts},
-   *                          copilot: {mode, usage, opts, rows}, deepseek: {mode, opts} };
+   *                          copilot: {mode, usage, opts, rows}, mistral: {mode, usage},
+   *                          deepseek: {mode, opts} };
    *                          a missing provider, and one turned off, both draw no card.
    */
   function render(host, state) {

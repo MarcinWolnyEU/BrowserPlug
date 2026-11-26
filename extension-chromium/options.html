@@ -2157,6 +2157,57 @@
                     </div>
                 </div>
 
+                <!-- Mistral AI sessions (admin.mistral.ai included Vibe & Studio and API allowances) -->
+                <div class="card">
+                    <div class="card-head">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        <h2>Mistral AI sessions</h2>
+                    </div>
+                    <p class="card-desc">
+                        Your <strong>monthly</strong> included Mistral allowances (Vibe &amp; Studio, and API)
+                        and your plan name, read from <code>admin.mistral.ai</code> and
+                        <code>auth.mistral.ai</code> with this browser's cookies. Sign-in happens at
+                        <code>chat.mistral.ai</code>. The bar on <strong>Mistral Vibe</strong> rows shows the
+                        Vibe &amp; Studio allowance.
+                    </p>
+
+                    <div class="field token-state" id="mistralAuth">
+                        <div class="token-state-line">
+                            <span class="token-state-dot" id="mistralAuthDot"></span>
+                            <span id="mistralAuthText">Checking your chat.mistral.ai sign-in…</span>
+                        </div>
+                        <div class="help-text" id="mistralAuthHelp"></div>
+                        <div class="btn-row">
+                            <button type="button" id="mistralAuthRecheck" class="btn btn-ghost btn-sm">Re-check</button>
+                            <button type="button" id="mistralSignIn" class="btn btn-ghost btn-sm" hidden>Open chat.mistral.ai to sign in</button>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="mistralDisplayMode">Mistral AI usage display</label>
+                        <select id="mistralDisplayMode">
+                            <option value="disabled">Disabled</option>
+                            <option value="tab">Visible only in Usage tab</option>
+                            <option value="client">Visible in Usage tab and below client</option>
+                        </select>
+                        <div class="help-text">Ships disabled. Disabled also stops the admin.mistral.ai and auth.mistral.ai requests.</div>
+                    </div>
+
+                    <div class="field">
+                        <label class="checkbox-label" for="mistralBackgroundRefresh">
+                            <input type="checkbox" id="mistralBackgroundRefresh">
+                            <span>Query every <span data-refresh-minutes-of="mistralUsageRefreshMinutes">5</span> min in background to update the usage progress bar</span>
+                        </label>
+                    </div>
+
+                    <div class="field">
+                        <label for="mistralUsageRefreshMinutes">Session usage refresh rate (minutes)</label>
+                        <input type="number" id="mistralUsageRefreshMinutes" value="5" min="1" max="60">
+                    </div>
+                </div>
+
                 <!-- DeepSeek sessions (peak/off-peak price clock) -->
                 <div class="card">
                     <div class="card-head">
@@ -2343,6 +2394,7 @@
 
     <script src="ws-crypto.js"></script>
     <script src="vendor/copilot-view.js"></script>
+    <script src="vendor/mistral-view.js"></script>
     <script src="body-censor.js"></script>
     <script src="censor-panel.js"></script>
     <script src="options.js"></script>

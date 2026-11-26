@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "BrowserPlug",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Browser extension that exposes data and functions to MCP clients via WebSocket",
   "author": "Marcin Wolny",
   "homepage_url": "https://github.com/MarcinWolnyEU/browserplug",
@@ -26,7 +26,7 @@
     "proxy"
   ],
   "background": {
-    "scripts": ["vendor/period-history.js", "vendor/anthropic-data.js", "vendor/openai-data.js", "vendor/copilot-data.js", "vendor/kilocode-modelnames-data.js", "vendor/usage-sampler.js", "toolbar-icon.js", "connection-journal.js", "vendor/mlkem.js", "ws-crypto.js", "body-censor.js", "token-trust.js", "background.js"],
+    "scripts": ["vendor/period-history.js", "vendor/anthropic-data.js", "vendor/openai-data.js", "vendor/copilot-data.js", "vendor/mistral-data.js", "vendor/kilocode-modelnames-data.js", "vendor/usage-sampler.js", "toolbar-icon.js", "connection-journal.js", "vendor/mlkem.js", "ws-crypto.js", "body-censor.js", "token-trust.js", "background.js"],
     "persistent": true
   },
   "content_scripts": [

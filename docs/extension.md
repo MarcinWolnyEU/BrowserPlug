@@ -110,6 +110,7 @@ Disabled stops the requests too.
 | Anthropic | Claude session and weekly usage, on Claude Code rows | below client |
 | OpenAI | ChatGPT/Codex 5-hour and weekly windows, on Codex CLI rows | disabled |
 | GitHub Copilot | monthly quotas, on GitHub Copilot Chat rows | below client |
+| Mistral AI | monthly Vibe & Studio and API allowances (amount spent, percentage, reset) and your plan name; the Mistral Vibe row shows the Vibe & Studio one | disabled |
 | DeepSeek | a peak and off-peak price clock, on DSH rows (no request) | disabled |
 
 Signed out of a provider's site, its panel shows nothing (Anthropic keeps its peak-hours

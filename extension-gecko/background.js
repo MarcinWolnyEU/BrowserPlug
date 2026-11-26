@@ -1424,6 +1424,10 @@ const openaiUsageStore = OpenAIData.createUsageStore({ local: browser.storage.lo
 // entitlement, two calls on this browser's cookies. The login is what lets the popup
 // notice when this browser and VS Code are signed in to different GitHub accounts.
 const copilotUsageStore = CopilotData.createUsageStore({ local: browser.storage.local });
+// The same, for Mistral AI (vendor/mistral-data.js): the two included allowances and the
+// plan name from admin.mistral.ai, and the account id from auth.mistral.ai, three calls on
+// this browser's cookies.
+const mistralUsageStore = MistralData.createUsageStore({ local: browser.storage.local });
 // Kilo provider/model NAME resolver (models.dev), with a persistent storage.local
 // cache; see vendor/kilocode-modelnames-data.js. The popup asks via resolveKiloNames.
 const kiloNameResolver = KiloModelNames.createResolver({ local: browser.storage.local });
@@ -1441,13 +1445,17 @@ const usageSampler = UsageSampler.createSampler({
     { key: 'anthropic', sample: () => claudeUsageStore.get(true) },
     { key: 'openai', sample: () => openaiUsageStore.get(true) },
     { key: 'copilot', sample: () => copilotUsageStore.get(true) },
+    { key: 'mistral', sample: () => mistralUsageStore.get(true) },
   ],
   onError: (e) => console.warn('Usage sample failed:', (e && e.message) || e),
 });
 const USAGE_SETTINGS_DEFAULTS = {
   anthropicUsageRefreshMinutes: 5, openaiUsageRefreshMinutes: 5, copilotUsageRefreshMinutes: 5,
+  mistralUsageRefreshMinutes: 5,
   anthropicDisplayMode: 'client', openaiDisplayMode: 'disabled', copilotDisplayMode: 'client',
+  mistralDisplayMode: 'disabled',
   anthropicBackgroundRefresh: false, openaiBackgroundRefresh: false, copilotBackgroundRefresh: false,
+  mistralBackgroundRefresh: false,
 };
 async function applyUsageSettings() {
   // A profile saved by 1.9.1 or older may still hold the retired 'always' mode. Rewrite it
@@ -1459,9 +1467,12 @@ async function applyUsageSettings() {
   } catch (e) { /* no storage: the defaults below apply */ }
   let s = USAGE_SETTINGS_DEFAULTS;
   try { s = await browser.storage.sync.get(USAGE_SETTINGS_DEFAULTS); } catch (e) { /* keep defaults */ }
+  // A stored mode this build does not know means the card's default here, as in the popup.
+  s = UsageSampler.withKnownModes(s, USAGE_SETTINGS_DEFAULTS);
   claudeUsageStore.setRefreshMinutes(s.anthropicUsageRefreshMinutes);
   openaiUsageStore.setRefreshMinutes(s.openaiUsageRefreshMinutes);
   copilotUsageStore.setRefreshMinutes(s.copilotUsageRefreshMinutes);
+  mistralUsageStore.setRefreshMinutes(s.mistralUsageRefreshMinutes);
   await usageSampler.apply({
     anthropic: { mode: s.anthropicDisplayMode, backgroundRefresh: s.anthropicBackgroundRefresh,
                  refreshMinutes: s.anthropicUsageRefreshMinutes },
@@ -1469,6 +1480,8 @@ async function applyUsageSettings() {
               refreshMinutes: s.openaiUsageRefreshMinutes },
     copilot: { mode: s.copilotDisplayMode, backgroundRefresh: s.copilotBackgroundRefresh,
                refreshMinutes: s.copilotUsageRefreshMinutes },
+    mistral: { mode: s.mistralDisplayMode, backgroundRefresh: s.mistralBackgroundRefresh,
+               refreshMinutes: s.mistralUsageRefreshMinutes },
   });
 }
 applyUsageSettings();
@@ -1477,10 +1490,11 @@ applyUsageSettings();
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
   if (changes.anthropicUsageRefreshMinutes || changes.openaiUsageRefreshMinutes
-      || changes.copilotUsageRefreshMinutes
+      || changes.copilotUsageRefreshMinutes || changes.mistralUsageRefreshMinutes
       || changes.anthropicDisplayMode || changes.openaiDisplayMode || changes.copilotDisplayMode
+      || changes.mistralDisplayMode
       || changes.anthropicBackgroundRefresh || changes.openaiBackgroundRefresh
-      || changes.copilotBackgroundRefresh
+      || changes.copilotBackgroundRefresh || changes.mistralBackgroundRefresh
       || changes.deepseekDisplayMode) applyUsageSettings();
 });
 // An update from a build whose DeepSeek default was 'client' keeps the clock it showed
@@ -1566,6 +1580,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     try { claudeUsageStore.clearHistory(); } catch (e) {}
     try { openaiUsageStore.clearHistory(); } catch (e) {}
     try { copilotUsageStore.clearHistory(); } catch (e) {}
+    try { mistralUsageStore.clearHistory(); } catch (e) {}
     try { kiloNameResolver.clear(); } catch (e) {}
     sendResponse({ success: true });
     return true;
@@ -1678,6 +1693,13 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'getCopilotUsage') {
     copilotUsageStore.get(request.force)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true; // async response
+  }
+
+  if (request.action === 'getMistralUsage') {
+    mistralUsageStore.get(request.force)
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // async response

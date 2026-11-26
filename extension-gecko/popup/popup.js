@@ -257,6 +257,8 @@ let lastOpenAIUsage = null;
 // The same, for GitHub Copilot, plus the Copilot rows the Usage tab reports on.
 let lastCopilotUsage = null;
 let lastCopilotRows = [];
+// The same, for the Mistral AI bar.
+let lastMistralUsage = null;
 
 // Which Claude Code rows have their usage chart expanded (survives the 2s
 // refresh, like expandedConnKeys). Keyed the same way (pid: / label).
@@ -290,6 +292,10 @@ const isOpenAIClient = OpenAIView.isOpenAIClient || (() => false);
 const CopilotView = globalThis.CopilotView || {};
 const isCopilotClient = CopilotView.isCopilotClient || (() => false);
 
+// Mistral AI's row bar and copy text (vendor/mistral-view.js), guarded the same way.
+const MistralView = globalThis.MistralView || {};
+const isMistralClient = MistralView.isMistralClient || (() => false);
+
 // Where each provider's indicator may appear, and the render options that go with it.
 // 'disabled' shows nothing anywhere and suppresses the provider's fetch; 'tab' shows it
 // on the Usage tab only; 'client' shows it on the Usage tab and as a bar on each
@@ -303,6 +309,9 @@ const PROVIDER_MODE_DEFAULTS = {
   // only say "not signed in" is not a default worth having.
   openaiDisplayMode: 'disabled',
   copilotDisplayMode: 'client',
+  // Mistral ships off, like OpenAI: it needs a signed-in chat.mistral.ai profile, and an
+  // update must not start contacting a third-party site on its own.
+  mistralDisplayMode: 'disabled',
 };
 
 // The modes in effect at the last render, for the right-click "Copy connection info"
@@ -341,6 +350,10 @@ async function readProviderSettings() {
       mode: modeOf(s.copilotDisplayMode, 'copilotDisplayMode'),
       opts: { showCompletions: !!s.copilotShowCompletions },
     },
+    mistral: {
+      mode: modeOf(s.mistralDisplayMode, 'mistralDisplayMode'),
+      opts: {},
+    },
   };
 }
 
@@ -354,7 +367,7 @@ async function applyUsageTabVisibility(prov) {
   const tabs = globalThis.PopupTabs;
   if (!tabs || !tabs.setVisible) return;
   const p = prov || await readProviderSettings();
-  tabs.setVisible('usage', ['anthropic', 'openai', 'copilot', 'deepseek']
+  tabs.setVisible('usage', ['anthropic', 'openai', 'copilot', 'mistral', 'deepseek']
     .some(k => p[k] && p[k].mode !== 'disabled'));
 }
 
@@ -409,13 +422,15 @@ async function updateUsagePane() {
     anthropic: { ...prov.anthropic, usage: null },
     openai: { ...prov.openai, usage: null },
     copilot: { ...prov.copilot, usage: null, rows: lastCopilotRows },
+    mistral: { ...prov.mistral, usage: null },
     deepseek: prov.deepseek,
   };
-  // The three reads are independent; a slow provider must not hold up the other two.
-  [state.anthropic.usage, state.openai.usage, state.copilot.usage] = await Promise.all([
+  // The reads are independent; a slow provider must not hold up the others.
+  [state.anthropic.usage, state.openai.usage, state.copilot.usage, state.mistral.usage] = await Promise.all([
     state.anthropic.mode !== 'disabled' ? askBackground('getClaudeUsage') : null,
     state.openai.mode !== 'disabled' ? askBackground('getOpenAIUsage') : null,
     state.copilot.mode !== 'disabled' ? readCopilotUsage() : null,
+    state.mistral.mode !== 'disabled' ? askBackground('getMistralUsage') : null,
   ]);
   usagePane.render(host, state);
 }
@@ -780,6 +795,14 @@ async function updateConnections() {
   }
   lastCopilotUsage = copilotUsage;
 
+  // And for Mistral AI: only while a Mistral Vibe row is on screen and the panel is set to
+  // draw on it.
+  let mistralUsage = null;
+  if (provider.mistral.mode === 'client' && conns.some(isMistralClient)) {
+    mistralUsage = await askBackground('getMistralUsage');
+  }
+  lastMistralUsage = mistralUsage;
+
   // Provider/model NAMES: gather the distinct (provider, model) pairs from the rows
   // that carry them and resolve them all in ONE round-trip (the background caches +
   // hits models.dev at most once). Attaches provider_name/model_name for the
@@ -937,6 +960,8 @@ async function updateConnections() {
         // including the "other account" marker when the two GitHub logins differ.
         inlineEl = CopilotView.buildRowInline(c, copilotUsage, provider.copilot.opts,
           provider.copilot.mode === 'client');
+      } else if (isMistralClient(c) && provider.mistral.mode === 'client' && MistralView.buildRowInline) {
+        inlineEl = MistralView.buildRowInline(mistralUsage);
       } else if (hasModelBadge(c)) {
         inlineEl = KiloCode.buildProviderBadge(c);
       }
@@ -1541,6 +1566,9 @@ function buildConnectionCopyNode(c, opts) {
     else if (isCopilotClient(c) && CopilotView.rowSummaryText) {
       inlineTxt = CopilotView.rowSummaryText(c, lastCopilotUsage,
         lastProviderSettings && lastProviderSettings.copilot.opts, modeOf('copilot') === 'client');
+    }
+    else if (isMistralClient(c) && modeOf('mistral') === 'client' && MistralView.rowSummaryText) {
+      inlineTxt = MistralView.rowSummaryText(lastMistralUsage);
     }
     else if (hasModelBadge(c)) inlineTxt = KiloCode.summaryText(c);
     // Bar first, matching the panel (where it leads the line now that the pid it used

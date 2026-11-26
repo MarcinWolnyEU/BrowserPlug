@@ -96,7 +96,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     for (const id of ['copilotBackgroundRefresh', 'copilotUsageRefreshMinutes', 'copilotShowCompletions']) {
         document.getElementById(id).addEventListener('change', saveProviderSettings);
     }
-    for (const id of ['anthropicUsageRefreshMinutes', 'openaiUsageRefreshMinutes', 'copilotUsageRefreshMinutes']) {
+    for (const id of ['mistralBackgroundRefresh', 'mistralUsageRefreshMinutes']) {
+        document.getElementById(id).addEventListener('change', saveProviderSettings);
+    }
+    for (const id of ['anthropicUsageRefreshMinutes', 'openaiUsageRefreshMinutes', 'copilotUsageRefreshMinutes',
+                      'mistralUsageRefreshMinutes']) {
         document.getElementById(id).addEventListener('input', syncRefreshLabels);
     }
 
@@ -117,6 +121,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         browser.tabs.create({ url: 'https://github.com/login' });
     });
     refreshProviderAuthIfOn('copilotDisplayMode');
+    // chat.mistral.ai sign-in state for the Mistral AI card (see refreshMistralAuth)
+    document.getElementById('mistralAuthRecheck').addEventListener('click', refreshMistralAuth);
+    document.getElementById('mistralSignIn').addEventListener('click', () => {
+        browser.tabs.create({ url: 'https://chat.mistral.ai/' });
+    });
+    refreshProviderAuthIfOn('mistralDisplayMode');
     document.getElementById('openaiSignIn').addEventListener('click', () => {
         browser.tabs.create({ url: 'https://chatgpt.com/' });
     });
@@ -934,6 +944,10 @@ async function loadSettings() {
             copilotUsageRefreshMinutes: 5,
             copilotShowCompletions: false,
             copilotBackgroundRefresh: false,
+            // Provider-specific (Mistral AI included allowances; off by default)
+            mistralDisplayMode: PROVIDER_MODE_DEFAULTS.mistralDisplayMode,
+            mistralUsageRefreshMinutes: 5,
+            mistralBackgroundRefresh: false,
             // Provider-specific (DeepSeek price clock)
             deepseekDisplayMode: PROVIDER_MODE_DEFAULTS.deepseekDisplayMode,
             deepseekPeakLeadMinutes: 0,
@@ -978,6 +992,9 @@ async function loadSettings() {
         document.getElementById('copilotUsageRefreshMinutes').value = result.copilotUsageRefreshMinutes;
         document.getElementById('copilotShowCompletions').checked = result.copilotShowCompletions;
         document.getElementById('copilotBackgroundRefresh').checked = result.copilotBackgroundRefresh;
+        setProviderMode('mistralDisplayMode', result.mistralDisplayMode);
+        document.getElementById('mistralUsageRefreshMinutes').value = result.mistralUsageRefreshMinutes;
+        document.getElementById('mistralBackgroundRefresh').checked = result.mistralBackgroundRefresh;
         syncRefreshLabels();
         setProviderMode('deepseekDisplayMode', result.deepseekDisplayMode);
         document.getElementById('deepseekPeakLeadMinutes').value = result.deepseekPeakLeadMinutes;
@@ -1214,11 +1231,13 @@ const PROVIDER_DISPLAY_MODES = ['disabled', 'tab', 'client'];
 // The mode each card ships with. popup.js keeps the same table and falls back to it for a
 // value it does not know, so both pages draw such a card the same way. OpenAI ships off:
 // it needs a signed-in chatgpt.com profile, and a panel that can only say "not signed
-// in" is not a default worth shipping.
+// in" is not a default worth shipping. Mistral ships off for the same reason, and because
+// an update must not start contacting a third-party site on its own.
 const PROVIDER_MODE_DEFAULTS = {
     anthropicDisplayMode: 'client',
     openaiDisplayMode: 'disabled',
     copilotDisplayMode: 'client',
+    mistralDisplayMode: 'disabled',
     deepseekDisplayMode: 'disabled',
 };
 
@@ -1230,6 +1249,7 @@ const PROVIDER_SUB_FIELDS = {
                            'anthropicUsageRefreshMinutes', 'anthropicShowWeekly'],
     openaiDisplayMode: ['openaiBackgroundRefresh', 'openaiUsageRefreshMinutes', 'openaiShowWeekly'],
     copilotDisplayMode: ['copilotBackgroundRefresh', 'copilotUsageRefreshMinutes', 'copilotShowCompletions'],
+    mistralDisplayMode: ['mistralBackgroundRefresh', 'mistralUsageRefreshMinutes'],
     deepseekDisplayMode: ['deepseekPeakLeadMinutes'],
 };
 
@@ -1268,6 +1288,7 @@ const PROVIDER_AUTH_CHECKS = {
     anthropicDisplayMode: { prefix: 'anthropic', site: 'claude.ai', check: () => refreshAnthropicAuth() },
     openaiDisplayMode: { prefix: 'openai', site: 'chatgpt.com', check: () => refreshOpenAIAuth() },
     copilotDisplayMode: { prefix: 'copilot', site: 'github.com', check: () => refreshCopilotAuth() },
+    mistralDisplayMode: { prefix: 'mistral', site: 'chat.mistral.ai', check: () => refreshMistralAuth() },
 };
 
 function refreshProviderAuthIfOn(modeId) {
@@ -1323,6 +1344,8 @@ async function saveProviderSettings() {
     const copilotUsageRefreshMinutes = clampInt('copilotUsageRefreshMinutes', 5, 1, 60);
     const copilotShowCompletions = document.getElementById('copilotShowCompletions').checked;
     const copilotBackgroundRefresh = document.getElementById('copilotBackgroundRefresh').checked;
+    const mistralUsageRefreshMinutes = clampInt('mistralUsageRefreshMinutes', 5, 1, 60);
+    const mistralBackgroundRefresh = document.getElementById('mistralBackgroundRefresh').checked;
     const deepseekPeakLeadMinutes = clampInt('deepseekPeakLeadMinutes', 0, 0, 240);
     syncRefreshLabels();
     try {
@@ -1341,6 +1364,9 @@ async function saveProviderSettings() {
             copilotUsageRefreshMinutes,
             copilotShowCompletions,
             copilotBackgroundRefresh,
+            mistralDisplayMode: providerMode('mistralDisplayMode'),
+            mistralUsageRefreshMinutes,
+            mistralBackgroundRefresh,
             deepseekDisplayMode: providerMode('deepseekDisplayMode'),
             deepseekPeakLeadMinutes
         });
@@ -1462,6 +1488,42 @@ async function refreshCopilotAuth() {
     recheck.disabled = false;
 
     const s = CV.authState(data, failure);
+    dot.className = `token-state-dot ${s.tone}`;
+    text.textContent = s.text;
+    help.textContent = s.help;
+    signIn.hidden = !s.signIn;
+}
+
+// The Mistral AI card's sign-in line. The wording lives in MistralView.authState
+// (vendor/mistral-view.js, unit-tested there); this only asks the background for one
+// forced read and paints the answer.
+async function refreshMistralAuth() {
+    const dot = document.getElementById('mistralAuthDot');
+    const text = document.getElementById('mistralAuthText');
+    const help = document.getElementById('mistralAuthHelp');
+    const signIn = document.getElementById('mistralSignIn');
+    const recheck = document.getElementById('mistralAuthRecheck');
+    const MV = globalThis.MistralView;
+    if (!dot || !text || !help || !MV || !MV.authState) return;
+
+    dot.className = 'token-state-dot';
+    text.textContent = 'Checking your chat.mistral.ai sign-in…';
+    help.textContent = '';
+    signIn.hidden = true;
+    recheck.disabled = true;
+
+    let data = null;
+    let failure = null;
+    try {
+        const r = await browser.runtime.sendMessage({ action: 'getMistralUsage', force: true });
+        if (r && r.success) data = r.data;
+        else failure = (r && r.error) || 'the extension did not answer';
+    } catch (error) {
+        failure = error.message || String(error);
+    }
+    recheck.disabled = false;
+
+    const s = MV.authState(data, failure);
     dot.className = `token-state-dot ${s.tone}`;
     text.textContent = s.text;
     help.textContent = s.help;

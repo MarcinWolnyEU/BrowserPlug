@@ -117,6 +117,20 @@
     };
   }
 
+  // popup.js and options.js read a stored display mode they do not know (a newer build's, a
+  // hand edit) as the card's shipped default. The clock has to read it the same way, or a
+  // card that both pages show as Disabled would still be polled in the background.
+  // `defaults` is the background's USAGE_SETTINGS_DEFAULTS; only its *DisplayMode keys are
+  // looked at. Returns a copy.
+  const DISPLAY_MODES = ['disabled', 'tab', 'client'];
+  function withKnownModes(settings, defaults) {
+    const out = Object.assign({}, settings);
+    for (const key of Object.keys(defaults || {})) {
+      if (/DisplayMode$/.test(key) && !DISPLAY_MODES.includes(out[key])) out[key] = defaults[key];
+    }
+    return out;
+  }
+
   // Builds up to 1.9.1 had a third display mode, 'always': a line of its own above
   // Connections, plus this clock. The Usage tab replaced the line and the clock became a
   // checkbox, so a stored 'always' turns into 'tab' (it never drew on the rows either)
@@ -162,7 +176,7 @@
   }
 
   globalThis.UsageSampler = {
-    ALARM_PREFIX, alarmName, refreshMinutesOf, createSampler, LEGACY_MODE_KEYS, legacyModePatch,
-    legacyDefaultsPatch,
+    ALARM_PREFIX, alarmName, refreshMinutesOf, createSampler, withKnownModes, LEGACY_MODE_KEYS,
+    legacyModePatch, legacyDefaultsPatch,
   };
 })();

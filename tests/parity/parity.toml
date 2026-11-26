@@ -52,6 +52,8 @@ files = [
   "vendor/openai-view.js",
   "vendor/copilot-data.js",
   "vendor/copilot-view.js",
+  "vendor/mistral-data.js",
+  "vendor/mistral-view.js",
   "vendor/kilocode-modelnames-data.js",
   "vendor/usage-sampler.js",
 ]
@@ -149,6 +151,8 @@ floor = 13
 "openai-data.test.mjs"              = { scope = "shared" }
 "copilot-view.test.mjs"             = { scope = "shared" }
 "copilot-data.test.mjs"             = { scope = "shared" }
+"mistral-view.test.mjs"             = { scope = "shared" }
+"mistral-data.test.mjs"             = { scope = "shared" }
 "kilocode-modelnames-data.test.mjs" = { scope = "shared" }
 "options.test.mjs"                  = { scope = "shared" }
 "body-censor.test.mjs"              = { scope = "shared", note = "the SHARED body-censor.js behind Options > General > Captured bodies: key masking per body shape (JSON walk, form, multipart, text fallback), the custom-pattern rules, the backtracking heuristic and the result marker. Drives the shared file directly, so one run covers both trees." }
@@ -160,6 +164,7 @@ floor = 13
 "popup.test.mjs"                    = { scope = "shared", note = "popup/* are byte-identical; the test also slices background.js (updateActionIndicator..setConnectionPhase), a diverging file — those anchors are cross-checked in BOTH trees by invariant E." }
 "popup-tabs.test.mjs"               = { scope = "shared", note = "the popup's tab strip (popup/popup-tabs.js): restore from storage.local, click and arrow-key switching, the onShow report. Drives the SHARED file against the real popup.html under jsdom." }
 "usage-pane.test.mjs"               = { scope = "shared", note = "the popup's Usage tab (popup/usage-pane.js): one card per provider in every state, drawn from the SHARED view modules under jsdom with a fixed clock." }
+"usage-wiring.test.mjs"            = { scope = "shared", note = "the glue around every provider usage store, read from both trees' sources: each vendor/*-data.js is loaded by Firefox background.scripts and Chromium importScripts after period-history.js, each background.js builds the store, answers its get<Provider>Usage message, clears its history in resetToDefaults and feeds it to the settings block. One file reads both trees, so one run covers both." }
 "chromium-access.test.mjs"        = { scope = "shared", note = "the popup's Allow user scripts card and the \"scripts are blocked\" status link (popup/chromium-access.js): the shared popup run under jsdom as Chromium (a chrome global, no browser) and as Firefox." }
 "connection.test.mjs"               = { scope = "twin" }
 "tokenbootstrap.test.mjs"           = { scope = "twin" }
