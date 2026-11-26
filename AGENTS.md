@@ -232,7 +232,7 @@ uv run --script build_xpi.py      # -> dist/firefox/*.xpi and dist/chrome/*.zip
 uv run --locked --script tests/run.py -q                # unit + parity, ~9 min (~8 on a Mac)
 uv run --locked --script tests/run.py parity/ -q        # <1 s
 uv run --locked --script tests/run.py --ruff check server launcher shared-py tests scripts   # static gate, enforced by unit/test_static_analysis.py
-npm run test:js                                         # ~15 s; npm install once
+npm install --no-package-lock --ignore-scripts && npm run test:js   # ~15 s; re-install first, jsdom floats (see below)
 
 # INTEGRATION, both engines, ~12 min: 4 parallel workers, then the `timing` tests
 # serially (tests/run.py --help). Tell the user a finish TIME first.
@@ -254,6 +254,20 @@ FIREFOX_PATH="/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox
   catch a flake that fails 1 run in 12, and stress does not raise that rate; repetition does
   (`testing.md`, "Running a CI job locally"). Without `--ref` it tests the working tree,
   untracked files included: fine while iterating, and it can pass what CI fails.
+- Push only what passes CI. `ci.yml` has four required jobs (`static`, `unit`, `unit-macos`,
+  `build`), and `ci_local.py` without `--job` runs only the one for this OS, so it never covers
+  `static` (ruff, parity, version carriers, `npm run test:js`). Before a push also run
+  `uv run --script scripts/ci_local.py --job static --ref HEAD --stress 0`, and push only when
+  both are green. `--stress 0` matters here: `ci_local.py` adds 12 busy loops by default on this
+  16-core box, and that load fails two wall-clock tests in the JS step (`capture-stall` "restore
+  that never answers", `console-flush` "navigate leaves out entries") that pass without it.
+  The last step, `Lint workflows` (actionlint), cannot run on Windows and reports INCOMPLETE; that
+  is expected, so a workflow edit still needs a Mac run or a push to check it.
+- `package.json` has no lockfile, so CI installs the newest jsdom and a checkout's `node_modules`
+  goes stale. A green `npm run test:js` on an old jsdom proved nothing once: jsdom 31 rounds style
+  values to 6 decimals and failed a test that passed locally on 30. Run `npm install
+  --no-package-lock --ignore-scripts` before `npm run test:js`, and when you bump or float a dev
+  dependency, assert on rounded or parsed values, never on a serialized float.
 - One integration invocation at a time on a machine, and `timing` tests only on a quiet
   one. Runs share no state or ports, but they share the CPU, and the `timing` tests
   (wall-clock bounds, deliberate races, fixed sleeps) fail under load; the one
