@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
-import { domContentLoaded } from './dom-ready.mjs';
+import { createTestPage } from './dom-ready.mjs';
 import { assertMatchesContract } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -213,9 +213,7 @@ async function initPopup({
     const { multiple_extensions: _m, extension_warning: _w, ...current } = connections;
     assertMatchesContract(current, 'payload', { requireAll: false });
   }
-  const dom = new JSDOM(html, { pretendToBeVisual: true, runScripts: 'outside-only' });
-  const { window } = dom;
-  const pageReady = domContentLoaded(window);
+  const { window, pageReady } = createTestPage(html);
   const permissionRequests = [];
   const browserMock = makeBrowserMock(storage, connectionStatus,
     { failConfigRead, connections, platformOs, proxyGranted, permissionRequests, localStore });

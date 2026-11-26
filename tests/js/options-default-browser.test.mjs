@@ -18,8 +18,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { JSDOM } from 'jsdom';
-import { domContentLoaded } from './dom-ready.mjs';
+import { createTestPage } from './dom-ready.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OPTIONS_HTML = readFileSync(path.join(__dirname, '../../extension-gecko/options.html'), 'utf8');
@@ -55,9 +54,7 @@ function makePayload({ settings = {}, browsers = null } = {}) {
 // Load the real options.html and run the real options.js. `state.saves` collects every
 // setDefaultBrowser the page sends; `state.reply` decides what the server answers.
 async function initOptions({ payload = makePayload(), reply = null } = {}) {
-  const dom = new JSDOM(OPTIONS_HTML, { pretendToBeVisual: true, runScripts: 'outside-only' });
-  const { window } = dom;
-  const pageReady = domContentLoaded(window);
+  const { window, pageReady } = createTestPage(OPTIONS_HTML);
   const state = { payload, saves: [], reply, loads: 0 };
 
   window.browser = {
