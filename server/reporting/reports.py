@@ -346,7 +346,6 @@ class Reports:
             "connected_at": fmt(b.connected_at),
             "last_activity": fmt(b.last_activity),
             "browser_pid": b.browser_pid,
-            "firefox_pid": b.browser_pid,      # legacy alias of browser_pid; no reader left
             "remote_addr": b.remote_addr,
             "is_remote": b.is_remote,
             "platform": b.platform,
@@ -416,9 +415,7 @@ class Reports:
             "extension_file_access": file_access,
             "extension_proxy_access": proxy_access,
             "tools_signature": s.tools_signature(),
-            "browser_pids": (browser_pids := s.connected_browser_pids()),
-            # Legacy alias: older options pages read this key. One scan feeds both.
-            "firefox_pids": browser_pids,
+            "browser_pids": s.connected_browser_pids(),
             "browser_major": browser_major,
             # list(): the table grows on the uvicorn thread while this runs on another,
             # and walking the live view raises "changed size during iteration".

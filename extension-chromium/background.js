@@ -726,13 +726,6 @@ async function handleUnauthorized(reason) {
     return;
   }
 
-  if (token === await getAutoToken()) {
-    console.error(`${rejected}. The server rejected the very token it hands out; backing off.`);
-    journalNote('token_fetch', { reason: 'same token' });
-    scheduleReconnect();
-    return;
-  }
-
   try {
     await browser.storage.local.set({ [AUTO_TOKEN_KEY]: token });
   } catch (e) {
@@ -1355,23 +1348,6 @@ function sendError(id, code, message, details = {}) {
   wireSend(errorMessage);
 }
 
-function sendDebugLog(message, level = 'log') {
-  if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
-
-  const debugMessage = {
-    id: `debug_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    type: 'debug_log',
-    action: 'debug',
-    data: {
-      level: level,
-      message: message,
-      timestamp: new Date().toISOString()
-    }
-  };
-
-  wireSend(debugMessage);
-}
-
 // --- Claude usage (account-wide session/weekly limits from claude.ai) --------
 // The store lives in vendor/anthropic-data.js (loaded via importScripts). We
 // instantiate it with this extension's storage, keep the refresh setting in sync,
@@ -1409,6 +1385,7 @@ const usageSampler = UsageSampler.createSampler({
     { key: 'copilot', sample: () => copilotUsageStore.get(true) },
     { key: 'mistral', sample: () => mistralUsageStore.get(true) },
   ],
+  storage: browser.storage.local,   // the sampler's back-off for a signed-out provider
   onError: (e) => console.warn('Usage sample failed:', (e && e.message) || e),
 });
 const USAGE_SETTINGS_DEFAULTS = {
@@ -1420,13 +1397,6 @@ const USAGE_SETTINGS_DEFAULTS = {
   mistralBackgroundRefresh: false,
 };
 async function applyUsageSettings() {
-  // A profile saved by 1.9.1 or older may still hold the retired 'always' mode. Rewrite it
-  // before the read below, so that read already sees the new values.
-  try {
-    const legacy = UsageSampler.legacyModePatch(
-      await browser.storage.sync.get(UsageSampler.LEGACY_MODE_KEYS));
-    if (legacy) await browser.storage.sync.set(legacy);
-  } catch (e) { /* no storage: the defaults below apply */ }
   let s = USAGE_SETTINGS_DEFAULTS;
   try { s = await browser.storage.sync.get(USAGE_SETTINGS_DEFAULTS); } catch (e) { /* keep defaults */ }
   // A stored mode this build does not know means the card's default here, as in the popup.
@@ -1447,8 +1417,6 @@ async function applyUsageSettings() {
   });
 }
 applyUsageSettings();
-// deepseekDisplayMode drives no clock. It is watched so that an 'always' synced in from
-// an older build on another device still gets migrated.
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
   if (changes.anthropicUsageRefreshMinutes || changes.openaiUsageRefreshMinutes
@@ -1456,22 +1424,8 @@ browser.storage.onChanged.addListener((changes, area) => {
       || changes.anthropicDisplayMode || changes.openaiDisplayMode || changes.copilotDisplayMode
       || changes.mistralDisplayMode
       || changes.anthropicBackgroundRefresh || changes.openaiBackgroundRefresh
-      || changes.copilotBackgroundRefresh || changes.mistralBackgroundRefresh
-      || changes.deepseekDisplayMode) applyUsageSettings();
+      || changes.copilotBackgroundRefresh || changes.mistralBackgroundRefresh) applyUsageSettings();
 });
-// An update from a build whose DeepSeek default was 'client' keeps the clock it showed
-// (UsageSampler.legacyDefaultsPatch). Top level, so an MV3 worker keeps the listener.
-if (browser.runtime && browser.runtime.onInstalled) {
-  browser.runtime.onInstalled.addListener((details) => {
-    if (!details || details.reason !== 'update') return;
-    browser.storage.sync.get(['deepseekDisplayMode'])
-      .then((stored) => {
-        const patch = UsageSampler.legacyDefaultsPatch(details.previousVersion, stored);
-        return patch ? browser.storage.sync.set(patch) : null;
-      })
-      .catch((e) => console.warn('DeepSeek default migration failed:', (e && e.message) || e));
-  });
-}
 // ---- end provider usage settings -------------------------------------------
 
 // Handle popup requests for connection status (+ content-script relays: console
@@ -1624,6 +1578,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     claudeUsageStore.get(request.force)
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: err.message }));
+    usageSampler.wake('anthropic');   // somebody is looking: a signed-out back-off ends
     return true; // async response
   }
 
@@ -1631,6 +1586,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     openaiUsageStore.get(request.force)
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: err.message }));
+    usageSampler.wake('openai');   // somebody is looking: a signed-out back-off ends
     return true; // async response
   }
 
@@ -1638,6 +1594,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     copilotUsageStore.get(request.force)
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: err.message }));
+    usageSampler.wake('copilot');   // somebody is looking: a signed-out back-off ends
     return true; // async response
   }
 
@@ -1645,6 +1602,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     mistralUsageStore.get(request.force)
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: err.message }));
+    usageSampler.wake('mistral');   // somebody is looking: a signed-out back-off ends
     return true; // async response
   }
 
@@ -3036,11 +2994,7 @@ async function handleTabsAction(id, action, data) {
           const c = await waitForCommit(newTab.id, t0commit, 8000);
           if (c.url) newTab.url = c.url;
           if (c.title) newTab.title = c.title;
-          if (!c.committed) {
-            newTab.navPending = data.url;
-            if (c.navError) newTab.navError = humanizeNetError(c.navError);
-            else if (c.timedOut) newTab.navTimedOut = true;
-          }
+          if (!c.committed) noteOpenFailure(newTab, c, data.url, newTab.id, t0commit);
         }
         sendResponse(id, action, { tab: newTab, browserProxyChange: applied.change });
         break;
@@ -3049,14 +3003,6 @@ async function handleTabsAction(id, action, data) {
       case 'tabs.close':
         await browser.tabs.remove(data.tabId);
         sendResponse(id, action, { success: true });
-        break;
-
-      case 'tabs.update':
-        const updatedTab = await browser.tabs.update(data.tabId, {
-          url: data.url,
-          active: data.active
-        });
-        sendResponse(id, action, { tab: updatedTab });
         break;
 
       case 'tabs.switch': {
@@ -3075,7 +3021,6 @@ async function handleTabsAction(id, action, data) {
       }
 
       case 'tabs.screenshot':
-      case 'tabs.captureVisibleTab':
         try {
           await resolveTabId(data); // resolve active tab when omitted + stale-tab enrichment
           const shot = await captureScreenshot(data);
@@ -3143,28 +3088,6 @@ async function getCurrentTabUrl(tabId) {
     return tab.url;
   } catch (error) {
     return "Unknown URL";
-  }
-}
-
-// Helper function to send message with retry logic for content script
-async function sendMessageWithRetry(tabId, message, maxRetries = 5, delayMs = 2000) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const tab = await browser.tabs.get(tabId);
-      if (!tab) {
-        throw new Error('Tab not found');
-      }
-      if (tab.url && isPrivilegedUrl(tab.url)) {
-        throw new Error('Cannot access content script on system pages');
-      }
-      const result = await browser.tabs.sendMessage(tabId, message);
-      return result;
-    } catch (error) {
-      if (attempt === maxRetries) {
-        throw new Error(`Content script not available after ${maxRetries} attempts: ${error.message}`);
-      }
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
   }
 }
 
@@ -4453,31 +4376,6 @@ async function runActSteps(actTabId, data, frameId) {
 async function handleContentAction(id, action, data) {
   try {
     switch (action) {
-      case 'content.text':
-      case 'content.get_text':
-        const textResult = await sendMessageWithRetry(data.tabId, {
-          action: 'extractText'
-        });
-        sendResponse(id, action, {
-          text: textResult.text,
-          title: textResult.title,
-          url: textResult.url
-        });
-        break;
-
-      case 'content.html':
-      case 'content.get_html':
-        const htmlResult = await sendMessageWithRetry(data.tabId, {
-          action: 'extractHTML'
-        });
-        sendResponse(id, action, {
-          html: htmlResult.html,
-          title: htmlResult.title,
-          url: htmlResult.url
-        });
-        break;
-
-      case 'content.execute':
       case 'content.execute_script':
         try {
           const execTabId = await resolveTabId(data, { requireContent: true });
@@ -4613,12 +4511,8 @@ async function handleContentAction(id, action, data) {
       }
 
       case 'content.snapshot':
-      case 'content.click':
-      case 'content.fill':
-      case 'content.select':
-      case 'content.wait_for':
       case 'content.page_state': {
-        const method = action.split('.')[1]; // snapshot|click|fill|select|wait_for|page_state
+        const method = action.split('.')[1]; // snapshot|page_state
         try {
           const autoTabId = await resolveTabId(data, { requireContent: true });
           const result = await runAutomation(autoTabId, method, data, data.frameId);
@@ -4786,7 +4680,7 @@ function mainFrameOutcome(tabId, t0) {
   if (hops.length) out.redirects = hops.map(h => ({ to: h.to, status: h.status }));
   if (mainReq && mainReq.ip) out.dialedAddress = mainReq.ip;
   if (mainReq && typeof mainReq.status === 'number') out.httpStatus = mainReq.status;
-  if (errReq && errReq.error) out.reqError = errReq.error;
+  if (errReq && errReq.error) { out.reqError = errReq.error; out.reqErrorUrl = errReq.url; }
   return out;
 }
 
@@ -4869,7 +4763,13 @@ function navigationError(nav, t0, outcome, target) {
   const fromNav = err && nav.lastNavErrorAt >= t0 - 50
     && !abortOfReplacedLoad(err, nav.lastNavErrorUrl, own)
     && !abortOfCompletedLoad(err, nav.lastNavErrorUrl, nav, t0) ? err : null;
-  return fromNav || outcome.reqError || null;
+  if (fromNav) return fromNav;
+  // chromium: the request log often records a replaced load as the generic net::ERR_FAILED.
+  // webNavigation saying ERR_ABORTED for that same URL since t0 makes it the abort it was.
+  if (outcome.reqError === 'net::ERR_FAILED' && outcome.reqErrorUrl && (nav.events || []).some(e =>
+    e.ev === 'error' && e.at >= t0 - 50 && isNavAbort(e.error)
+    && navUrlKey(e.url) === navUrlKey(outcome.reqErrorUrl))) return 'net::ERR_ABORTED';
+  return outcome.reqError || null;
 }
 
 // The tab's main-frame webNavigation events since t0, as ms after t0, for a report that
@@ -4880,6 +4780,19 @@ function navEventsSince(nav, t0) {
     if (e.error) out.error = e.error;
     return out;
   });
+}
+
+// What a tab open that did not commit adds to the tab or window it returns: the URL still
+// pending, and either the net error with the main-frame events behind it (the server prints
+// them under an abort, as navigate's result does) or the timeout.
+function noteOpenFailure(target, c, url, tabId, sinceTs) {
+  target.navPending = url;
+  if (c.navError) {
+    target.navError = humanizeNetError(c.navError);
+    target.navEvents = navEventsSince(TAB_NAV.get(tabId) || {}, sinceTs);
+  } else if (c.timedOut) {
+    target.navTimedOut = true;
+  }
 }
 
 async function handleNavigationAction(id, action, data) {
@@ -5016,27 +4929,6 @@ async function handleNavigationAction(id, action, data) {
         break;
       }
 
-      case 'navigation.go':
-      case 'navigation.go_to_url':
-        await browser.tabs.update(data.tabId, { url: data.url });
-        sendResponse(id, action, { success: true });
-        break;
-
-      case 'navigation.back':
-        await browser.tabs.goBack(data.tabId);
-        sendResponse(id, action, { success: true });
-        break;
-
-      case 'navigation.forward':
-        await browser.tabs.goForward(data.tabId);
-        sendResponse(id, action, { success: true });
-        break;
-
-      case 'navigation.reload':
-        await browser.tabs.reload(data.tabId, { bypassCache: data.bypassCache || false });
-        sendResponse(id, action, { success: true });
-        break;
-
       default:
         sendError(id, 'UNKNOWN_ACTION', `Unknown navigation action: ${action}`);
     }
@@ -5054,32 +4946,6 @@ async function handleNavigationAction(id, action, data) {
 async function handleWindowsAction(id, action, data) {
   try {
     switch (action) {
-      case 'windows.list':
-        const windows = await browser.windows.getAll({
-          populate: data.populate !== false, // default to true
-          windowTypes: ['normal', 'popup', 'panel', 'devtools']
-        });
-        sendResponse(id, action, { windows });
-        break;
-
-      case 'windows.get':
-        if (!data.windowId) {
-          sendError(id, 'INVALID_PARAMETER', 'windowId is required for windows.get');
-          return;
-        }
-        const window = await browser.windows.get(data.windowId, {
-          populate: data.populate !== false
-        });
-        sendResponse(id, action, { window });
-        break;
-
-      case 'windows.get_current':
-        const currentWindow = await browser.windows.getCurrent({
-          populate: data.populate !== false
-        });
-        sendResponse(id, action, { window: currentWindow });
-        break;
-
       case 'windows.get_last_focused':
         const lastFocusedWindow = await browser.windows.getLastFocused({
           populate: data.populate !== false
@@ -5109,11 +4975,7 @@ async function handleWindowsAction(id, action, data) {
             const c = await waitForCommit(wtab.id, t0winCommit, 8000);
             if (c.url) wtab.url = c.url;
             if (c.title) wtab.title = c.title;
-            if (!c.committed) {
-              newWindow.navPending = data.url;
-              if (c.navError) newWindow.navError = humanizeNetError(c.navError);
-              else if (c.timedOut) newWindow.navTimedOut = true;
-            }
+            if (!c.committed) noteOpenFailure(newWindow, c, data.url, wtab.id, t0winCommit);
           }
         }
         sendResponse(id, action, { window: newWindow });
@@ -5125,15 +4987,6 @@ async function handleWindowsAction(id, action, data) {
           return;
         }
         await browser.windows.remove(data.windowId);
-        sendResponse(id, action, { success: true, windowId: data.windowId });
-        break;
-
-      case 'windows.focus':
-        if (!data.windowId) {
-          sendError(id, 'INVALID_PARAMETER', 'windowId is required for windows.focus');
-          return;
-        }
-        await browser.windows.update(data.windowId, { focused: true });
         sendResponse(id, action, { success: true, windowId: data.windowId });
         break;
 
@@ -6147,21 +6000,6 @@ async function handleTestAction(id, action, data) {
         await handleValidateUISync(id, data);
         break;
 
-      case 'test.refresh_ui_state':
-        await handleRefreshUIState(id, data);
-        break;
-
-      case 'test.visit_url':
-        await handleVisitURL(id, data);
-        break;
-
-      case 'test.visit_multiple_urls':
-        await handleVisitMultipleURLs(id, data);
-        break;
-
-      case 'test.create_test_tabs':
-        await handleCreateTestTabs(id, data);
-        break;
 
       default:
         sendError(id, 'UNKNOWN_ACTION', `Unknown test action: ${action}`);
@@ -6303,20 +6141,6 @@ async function handleValidateUISync(id, data) {
   }
 }
 
-// Trigger UI state refresh
-async function handleRefreshUIState(id, data) {
-  try {
-    sendResponse(id, 'test.refresh_ui_state', {
-      refreshed: true,
-      popupStateUpdated: true,
-      optionsStateUpdated: true,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    sendError(id, 'REFRESH_ERROR', `Failed to refresh UI state: ${error.message}`);
-  }
-}
-
 async function getPopupStateForValidation(storageConfig) {
   const effectiveHostname = storageConfig.testHostname || storageConfig.hostname || 'localhost';
   const effectivePort = storageConfig.testPort || storageConfig.port || 8772;
@@ -6337,239 +6161,6 @@ async function getOptionsStateForValidation(storageConfig) {
     displayPort,
     hasTestOverrides: storageConfig.testPort !== null || storageConfig.testHostname !== null
   };
-}
-
-// Test Helper: Visit a URL to create browser history
-async function handleVisitURL(id, data) {
-  try {
-    const url = data.url;
-    const waitTime = data.waitTime || 8000;
-
-    if (!url) {
-      sendError(id, 'INVALID_PARAMETERS', 'URL is required for test.visit_url');
-      return;
-    }
-
-    console.log(`[BrowserPlug] Starting visit to URL: ${url}`);
-
-    const tab = await browser.tabs.create({
-      url: url,
-      active: false
-    });
-
-    console.log(`[BrowserPlug] Created tab ${tab.id} for URL: ${url}`);
-
-    let tabLoaded = false;
-    let loadStartTime = Date.now();
-    const maxWaitTime = Math.max(waitTime, 10000);
-
-    const tabUpdateListener = (tabId, changeInfo, updatedTab) => {
-      if (tabId === tab.id && changeInfo.status === 'complete') {
-        console.log(`[BrowserPlug] Tab ${tab.id} finished loading`);
-        tabLoaded = true;
-      }
-    };
-
-    browser.tabs.onUpdated.addListener(tabUpdateListener);
-
-    try {
-      while (!tabLoaded && (Date.now() - loadStartTime) < maxWaitTime) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-
-      if (tabLoaded) {
-        console.log(`[BrowserPlug] Tab loaded in ${Date.now() - loadStartTime}ms`);
-        console.log(`[BrowserPlug] Waiting additional time for history recording...`);
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      } else {
-        console.log(`[BrowserPlug] Tab did not complete loading within ${maxWaitTime}ms, proceeding anyway`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-
-    } finally {
-      browser.tabs.onUpdated.removeListener(tabUpdateListener);
-    }
-
-    console.log(`[BrowserPlug] Closing tab ${tab.id}`);
-
-    await browser.tabs.remove(tab.id);
-
-    console.log(`[BrowserPlug] Successfully visited and closed: ${url}`);
-
-    sendResponse(id, 'test.visit_url', {
-      success: true,
-      url: url,
-      tabId: tab.id,
-      visitTime: new Date().toISOString(),
-      loadTime: Date.now() - loadStartTime,
-      tabLoaded: tabLoaded,
-      message: `Successfully visited ${url} (loaded: ${tabLoaded})`
-    });
-
-  } catch (error) {
-    sendError(id, 'VISIT_URL_ERROR', `Failed to visit URL: ${error.message}`);
-  }
-}
-
-// Test Helper: Visit multiple URLs to create test history
-async function handleVisitMultipleURLs(id, data) {
-  try {
-    const urls = data.urls || [];
-    const waitTime = data.waitTime || 8000;
-    const delayBetween = data.delayBetween || 3000;
-
-    if (!Array.isArray(urls) || urls.length === 0) {
-      sendError(id, 'INVALID_PARAMETERS', 'urls array is required for test.visit_multiple_urls');
-      return;
-    }
-
-    console.log(`[BrowserPlug] Starting visit to ${urls.length} URLs`);
-    const results = [];
-
-    for (let i = 0; i < urls.length; i++) {
-      const url = urls[i];
-      console.log(`[BrowserPlug] Visiting URL ${i + 1}/${urls.length}: ${url}`);
-
-      try {
-        const tab = await browser.tabs.create({
-          url: url,
-          active: false
-        });
-
-        let tabLoaded = false;
-        let loadStartTime = Date.now();
-        const maxWaitTime = Math.max(waitTime, 10000);
-
-        const tabUpdateListener = (tabId, changeInfo, updatedTab) => {
-          if (tabId === tab.id && changeInfo.status === 'complete') {
-            console.log(`[BrowserPlug] Tab ${tab.id} finished loading URL ${i + 1}`);
-            tabLoaded = true;
-          }
-        };
-
-        browser.tabs.onUpdated.addListener(tabUpdateListener);
-
-        try {
-          while (!tabLoaded && (Date.now() - loadStartTime) < maxWaitTime) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-
-          if (tabLoaded) {
-            console.log(`[BrowserPlug] URL ${i + 1} loaded in ${Date.now() - loadStartTime}ms`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          } else {
-            console.log(`[BrowserPlug] URL ${i + 1} did not complete loading within ${maxWaitTime}ms`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-          }
-
-        } finally {
-          browser.tabs.onUpdated.removeListener(tabUpdateListener);
-        }
-
-        await browser.tabs.remove(tab.id);
-
-        results.push({
-          url: url,
-          success: true,
-          tabId: tab.id,
-          visitTime: new Date().toISOString(),
-          loadTime: Date.now() - loadStartTime,
-          tabLoaded: tabLoaded
-        });
-
-        if (i < urls.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, delayBetween));
-        }
-
-      } catch (error) {
-        results.push({
-          url: url,
-          success: false,
-          error: error.message
-        });
-      }
-    }
-
-    const successCount = results.filter(r => r.success).length;
-
-    sendResponse(id, 'test.visit_multiple_urls', {
-      success: true,
-      totalUrls: urls.length,
-      successfulVisits: successCount,
-      failedVisits: urls.length - successCount,
-      results: results,
-      message: `Visited ${successCount}/${urls.length} URLs successfully`
-    });
-
-  } catch (error) {
-    sendError(id, 'VISIT_MULTIPLE_URLS_ERROR', `Failed to visit multiple URLs: ${error.message}`);
-  }
-}
-
-// Test Helper: Create test tabs for testing tabs.list functionality
-async function handleCreateTestTabs(id, data) {
-  try {
-    const count = data.count || 3;
-    const baseUrls = data.urls || [
-      'https://example.com',
-      'https://httpbin.org/html',
-      'https://httpbin.org/json'
-    ];
-    const closeExisting = data.closeExisting || false;
-
-    if (closeExisting) {
-      const existingTabs = await browser.tabs.query({});
-      const tabsToClose = existingTabs.filter(tab => !tab.pinned && tab.url !== 'about:blank');
-
-      if (tabsToClose.length > 0) {
-        await browser.tabs.remove(tabsToClose.map(tab => tab.id));
-      }
-    }
-
-    const createdTabs = [];
-
-    for (let i = 0; i < count; i++) {
-      const url = baseUrls[i % baseUrls.length];
-      const testUrl = `${url}?test=tab${i + 1}&timestamp=${Date.now()}`;
-
-      try {
-        const tab = await browser.tabs.create({
-          url: testUrl,
-          active: i === 0
-        });
-
-        createdTabs.push({
-          id: tab.id,
-          url: testUrl,
-          title: `Test Tab ${i + 1}`,
-          active: tab.active,
-          index: tab.index
-        });
-
-        if (i < count - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      } catch (error) {
-        console.error(`Failed to create test tab ${i + 1}:`, error);
-      }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    const allTabs = await browser.tabs.query({});
-
-    sendResponse(id, 'test.create_test_tabs', {
-      success: true,
-      message: `Successfully created ${createdTabs.length} test tabs`,
-      createdTabs: createdTabs,
-      totalTabsAfter: allTabs.length,
-      tabsCreated: createdTabs.length,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    sendError(id, 'CREATE_TABS_ERROR', `Failed to create test tabs: ${error.message}`);
-  }
 }
 
 // ✅ INITIALIZATION: Load config and connect. Runs on EVERY service-worker start

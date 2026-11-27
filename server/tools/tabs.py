@@ -20,7 +20,7 @@ from pydantic import Field
 from server.tools.tool_outcome import degrade, fail, invalid
 
 from server.tools.browser_calls import BrowserCalls, proxy_error
-from server.tools import browser_proxy, tor_proxy
+from server.tools import browser_proxy, tor_proxy, wait_report
 from server.tools.formatting import fmt_last_access
 from server.tools.response_hints import incognito_hint, missing_url_text
 
@@ -329,6 +329,8 @@ def make_tabs_tool(calls: BrowserCalls) -> Callable[..., Any]:
                     if w.get("navError"):
                         line += (f"\n  WARNING: navigation to {w['navPending']} failed: {w['navError']} "
                                  f"(tab is on {wtab.get('url')})")
+                        line += wait_report.nav_events_line(
+                            {**w, "netError": w["navError"], "url": wtab.get("url")})
                         return fail(line)
                     elif w.get("navTimedOut"):
                         line += (f"\n  NOTE: navigation to {w['navPending']} did not commit within 8s "
@@ -367,6 +369,7 @@ def make_tabs_tool(calls: BrowserCalls) -> Callable[..., Any]:
                 if t.get("navError"):
                     line += (f"\n  WARNING: navigation to {t['navPending']} failed: {t['navError']} "
                              f"(tab is on {t.get('url')})")
+                    line += wait_report.nav_events_line({**t, "netError": t["navError"]})
                     line += await tor_proxy.onion_hint(
                         calls, url=t["navPending"], error_text=t["navError"], proxy=proxy,
                         tab_id=None,

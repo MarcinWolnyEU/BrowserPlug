@@ -1,7 +1,7 @@
 """The MCP protocol-era policy: what the HTTP gate admits, and how a duplex stream is served.
 
 mcp 2.x serves two wire eras. The handshake era (`initialize` plus an Mcp-Session-Id)
-is the one client identity is keyed on (track_http_client, record_command,
+is the one client identity is keyed on (note_http_client, record_command,
 BrowserCalls.client_key). 2026-07-28 is stateless and issues no session: modern_identity.py
 gives such a request a key, and browserplug_shared/mcp_era.py holds the setting that decides
 whether it is served at all (`mcp.era`: handshake, direct or all).

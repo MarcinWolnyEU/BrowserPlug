@@ -2604,7 +2604,7 @@ function renderHealth(out, data) {
         ['Extension connected', boolCell(data.extension_connected)],
         ['Extension version', data.extension_version],
         ['Browser major', data.browser_major],
-        ['Browser PIDs', arrCell(data.browser_pids || data.firefox_pids)],
+        ['Browser PIDs', arrCell(data.browser_pids)],
         ['MCP client PIDs', arrCell(data.client_pids)],
         ['Local file access', fileAccessCell(data.extension_file_access)],
         ['Last command', lastCommandCell(data.last_command)],

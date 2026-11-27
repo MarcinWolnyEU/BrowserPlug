@@ -296,7 +296,6 @@ class ChromiumTestManager:
             f"--user-data-dir={self.user_data_dir}",
             "--no-first-run",
             "--no-default-browser-check",
-            "--silent-debugger-extension-api",
         ]
         if loader == 'pipe':
             flags += PIPE_FLAGS     # the extension is loaded over the pipe after launch

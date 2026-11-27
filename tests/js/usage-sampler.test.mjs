@@ -190,26 +190,129 @@ test('a failing sample is reported, not thrown at the alarm', async () => {
   assert.deepEqual(errors, ['signed out']);
 });
 
-test('a stored legacy "always" becomes the Usage tab with the box ticked', () => {
+// ---- back-off for a signed-out provider ---------------------------------------------------
+
+// A sampler whose anthropic provider answers what `answers.next` says: true = signed out.
+function backoffSampler({ storage } = {}) {
+  const alarms = fakeAlarms();
   const US = loadModule();
-  assert.deepEqual(US.legacyModePatch({
-    anthropicDisplayMode: 'always', openaiDisplayMode: 'client', deepseekDisplayMode: 'always',
-  }), {
-    anthropicDisplayMode: 'tab', anthropicBackgroundRefresh: true,
-    // DeepSeek fetches nothing, so there is no box to tick.
-    deepseekDisplayMode: 'tab',
+  const answers = { signedOut: true, calls: 0 };
+  const sampler = US.createSampler({
+    alarms,
+    storage,
+    providers: [{
+      key: 'anthropic',
+      sample: () => { answers.calls++; return Promise.resolve({ ok: false, signedOut: answers.signedOut }); },
+    }],
   });
-  assert.equal(US.legacyModePatch({ anthropicDisplayMode: 'client' }), null,
-    'nothing to migrate means nothing written, or every start would fire storage.onChanged');
-  assert.equal(US.legacyModePatch({}), null);
-  assert.deepEqual(US.LEGACY_MODE_KEYS,
-    ['anthropicDisplayMode', 'openaiDisplayMode', 'deepseekDisplayMode']);
+  // Fires n ticks, letting each answer land, and returns how many of them sampled.
+  async function ticks(n) {
+    const before = answers.calls;
+    for (let i = 0; i < n; i++) {
+      alarms.onAlarm.fire('browserplug-usage-anthropic');
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    return answers.calls - before;
+  }
+  return { alarms, sampler, answers, ticks };
+}
+
+test('back-off: each signed-out answer doubles the ticks skipped, up to an hour of wall time', async () => {
+  const { sampler, ticks } = backoffSampler();
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  // Sampled, skip 1 | sampled, skip 2 | sampled, skip 4 | sampled, skip 8 | sampled, skip 11 (cap).
+  const pattern = [];
+  for (let i = 0; i < 40; i++) pattern.push(await ticks(1));
+  const sampledAt = pattern.flatMap((n, i) => (n ? [i] : []));
+  assert.deepEqual(sampledAt, [0, 2, 5, 10, 19, 31],
+    'gaps of 1, 2, 4, 8, then 11 skipped ticks (11 x 5 min + the sample = one hour)');
+});
+
+test('back-off: a clock already at an hour has no room to back off', async () => {
+  const { sampler, ticks } = backoffSampler();
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 60 } });
+  assert.equal(await ticks(6), 6);
+});
+
+test('back-off: the first answer that is not signed out restores the full rate', async () => {
+  const { sampler, answers, ticks } = backoffSampler();
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  assert.equal(await ticks(1), 1);            // signed out: skip 1
+  assert.equal(await ticks(1), 0);
+  answers.signedOut = false;
+  assert.equal(await ticks(1), 1);            // the skipped gap is over; signed in now
+  assert.equal(await ticks(4), 4, 'every tick samples again');
+  answers.signedOut = true;
+  assert.equal(await ticks(2), 1, 'and the back-off starts over at one skipped tick');
+});
+
+test('back-off: wake() (the popup or Options asking) restores the full rate at once', async () => {
+  const { sampler, ticks } = backoffSampler();
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  assert.equal(await ticks(1), 1);
+  assert.equal(await ticks(1), 0, 'backed off');
+  sampler.wake('anthropic');
+  assert.equal(await ticks(1), 1, 'the next tick samples');
+});
+
+test('back-off: a new schedule (changed rate) or a switched-off clock starts at the full rate', async () => {
+  const { sampler, ticks } = backoffSampler();
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  assert.equal(await ticks(1), 1);            // signed out: gap 1, skip 1
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  assert.equal(await ticks(1), 0, 'a cold start that leaves the alarm alone keeps the back-off');
+  assert.equal(await ticks(1), 1);            // gap 2, skip 2
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 10 } });
+  assert.equal(await ticks(1), 1, 'a re-created alarm samples at once, and starts at gap 1');
+  assert.equal(await ticks(2), 1, 'one skipped tick, then a sample: the gap grew from 1, not from 2');
+  await sampler.apply({ anthropic: { mode: 'disabled', backgroundRefresh: true, refreshMinutes: 10 } });
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 10 } });
+  assert.equal(await ticks(1), 1, 'off and on again samples at once');
+});
+
+test('back-off: an error that is not "signed out" does not back off', async () => {
+  const alarms = fakeAlarms();
+  const US = loadModule();
+  let calls = 0;
+  const sampler = US.createSampler({
+    alarms,
+    providers: [{ key: 'anthropic', sample: () => { calls++; return Promise.resolve({ ok: false, error: 'HTTP 500' }); } }],
+  });
+  await sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  for (let i = 0; i < 5; i++) {
+    alarms.onAlarm.fire('browserplug-usage-anthropic');
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  assert.equal(calls, 5);
+});
+
+test('back-off: it survives an evicted worker, because it is kept in storage', async () => {
+  const store = {};
+  const storage = {
+    get: (k) => Promise.resolve(k in store ? { [k]: store[k] } : {}),
+    set: (o) => { Object.assign(store, JSON.parse(JSON.stringify(o))); return Promise.resolve(); },
+  };
+  const first = backoffSampler({ storage });
+  await first.sampler.apply({ anthropic: { ...ON, refreshMinutes: 5 } });
+  assert.equal(await first.ticks(1), 1);
+  assert.deepEqual(store.usageSamplerBackoff, { anthropic: { gap: 1, skip: 1 } });
+
+  // A new worker: nothing in memory but the stored state, and the alarm is already running.
+  const second = backoffSampler({ storage });
+  second.alarms.create('browserplug-usage-anthropic', { delayInMinutes: 5, periodInMinutes: 5 });
+  assert.equal(await second.ticks(1), 0, 'the stored skip is honoured');
+  assert.deepEqual(store.usageSamplerBackoff, { anthropic: { gap: 1, skip: 0 } });
+  assert.equal(await second.ticks(1), 1);
+  assert.deepEqual(store.usageSamplerBackoff, { anthropic: { gap: 2, skip: 2 } });
+  second.sampler.wake('anthropic');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(store.usageSamplerBackoff, {});
 });
 
 // ---- the arming glue, out of the real background.js ---------------------------------
 // applyUsageSettings() sliced on its own section anchors (invariant E checks both trees
 // still carry them). Its free names are passed in, so the slice runs as written.
-function loadBackgroundGlue({ stored, alarms }) {
+function loadBackgroundGlue({ stored, alarms, local, answer }) {
   const start = BG_SRC.indexOf('// ---- provider usage settings + the always-on sampler');
   const end = BG_SRC.indexOf('// ---- end provider usage settings', start);
   assert.ok(start >= 0 && end > start,
@@ -219,15 +322,14 @@ function loadBackgroundGlue({ stored, alarms }) {
   const sampled = { anthropic: [], openai: [], copilot: [], mistral: [] };
   const store = (key) => ({
     setRefreshMinutes: (m) => refreshCalls[key].push(m),
-    get: (force) => { sampled[key].push(force); return Promise.resolve(); },
+    get: (force) => { sampled[key].push(force); return Promise.resolve(answer); },
   });
   const changeListeners = [];
-  const installedListeners = [];
   const writes = [];
   const browser = {
     alarms,
-    runtime: { onInstalled: { addListener: (fn) => installedListeners.push(fn) } },
     storage: {
+      local,
       sync: {
         // storage.sync.get takes a defaults object or a key list; a list answers only
         // what is stored.
@@ -245,7 +347,7 @@ function loadBackgroundGlue({ stored, alarms }) {
     `${BG_SRC.slice(start, end)}\nreturn { usageSampler, applyUsageSettings };`);
   const out = factory(browser, loadModule(), store('anthropic'), store('openai'), store('copilot'),
     store('mistral'), { warn() {}, error() {} });
-  return { ...out, refreshCalls, sampled, changeListeners, installedListeners, writes };
+  return { ...out, refreshCalls, sampled, changeListeners, writes };
 }
 
 test('background glue: a ticked box reaches the sampler and arms a real alarm', async () => {
@@ -326,19 +428,50 @@ test('withKnownModes: only the *DisplayMode keys are read, an unknown value beco
   assert.deepEqual(US.withKnownModes({ x: 1 }, undefined), { x: 1 });
 });
 
-test('background glue: a legacy "always" is rewritten once and keeps its clock', async () => {
+test('background glue: the retired "always" mode reads as the card default, with nothing written', async () => {
+  // A profile saved by an old build may still hold it. It is not migrated: every reader
+  // (the clock here, the popup, Options) takes it as the card's shipped mode.
   const alarms = fakeAlarms();
   const glue = loadBackgroundGlue({
     alarms,
-    stored: { anthropicDisplayMode: 'always', anthropicUsageRefreshMinutes: 9 },
+    stored: {
+      anthropicDisplayMode: 'always', anthropicBackgroundRefresh: true, anthropicUsageRefreshMinutes: 9,
+      openaiDisplayMode: 'always', openaiBackgroundRefresh: true,   // ships disabled
+    },
   });
-  // Only the slice's own top-level applyUsageSettings(), the one a real start runs.
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(glue.writes, [{ anthropicDisplayMode: 'tab', anthropicBackgroundRefresh: true }]);
-  assert.equal(glue.usageSampler.armedPeriod('anthropic'), 9,
-    'the clock "always" used to run survives the migration');
+  await new Promise((r) => setTimeout(r, 0));   // the slice's own top-level applyUsageSettings()
+  assert.equal(glue.usageSampler.armedPeriod('anthropic'), 9, 'Anthropic ships on the row: the ticked box runs');
+  assert.equal(glue.usageSampler.armedPeriod('openai'), null, 'OpenAI ships disabled: no clock');
+  assert.deepEqual(glue.writes, [], 'nothing is rewritten in storage');
+});
+
+test('background glue: the sampler is given storage.local, and a provider answer reaches its back-off', async () => {
+  const alarms = fakeAlarms();
+  const local = { store: {} };
+  const glue = loadBackgroundGlue({
+    alarms,
+    stored: { anthropicBackgroundRefresh: true },
+    local: {
+      get: (k) => Promise.resolve(k in local.store ? { [k]: local.store[k] } : {}),
+      set: (o) => { Object.assign(local.store, o); return Promise.resolve(); },
+    },
+    answer: { ok: false, signedOut: true },
+  });
   await glue.applyUsageSettings();
-  assert.equal(glue.writes.length, 1, 'a migrated profile is not written again');
+  alarms.onAlarm.fire('browserplug-usage-anthropic');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(local.store.usageSamplerBackoff, { anthropic: { gap: 1, skip: 1 } },
+    'passing no storage to createSampler, or dropping the answer, must fail here');
+});
+
+test('background glue: each usage message wakes its own provider from a back-off', () => {
+  for (const [action, key] of [['getClaudeUsage', 'anthropic'], ['getOpenAIUsage', 'openai'],
+    ['getCopilotUsage', 'copilot'], ['getMistralUsage', 'mistral']]) {
+    const at = BG_SRC.indexOf(`request.action === '${action}'`);
+    assert.ok(at >= 0, `${action} handler not found`);
+    assert.ok(BG_SRC.slice(at, at + 600).includes(`usageSampler.wake('${key}')`),
+      `${action} must call usageSampler.wake('${key}')`);
+  }
 });
 
 test('background glue: the shipped defaults arm no clock, and the listener watches the mode', async () => {
@@ -381,32 +514,3 @@ test('the background, popup and Options mode defaults agree', () => {
   }
 });
 
-// ---- the DeepSeek default changed from 'client' to 'disabled' after 1.9.1 ----------------
-
-test('legacyDefaultsPatch: an update from 1.9.1 or older keeps the clock the old default showed', () => {
-  const US = loadModule();
-  for (const v of ['1.9.1', '1.9.0', '1.8.12', '1.9']) {
-    assert.deepEqual(US.legacyDefaultsPatch(v, {}), { deepseekDisplayMode: 'client' }, v);
-  }
-  assert.equal(US.legacyDefaultsPatch('1.9.1', { deepseekDisplayMode: 'disabled' }), null,
-    'a saved choice is the user\'s, whatever it is');
-  for (const v of ['1.9.2', '1.10.0', '2.0', undefined, '', 'nightly']) {
-    assert.equal(US.legacyDefaultsPatch(v, {}), null, String(v));
-  }
-});
-
-test('background glue: an update from 1.9.1 writes the old DeepSeek default down, once', async () => {
-  const glue = loadBackgroundGlue({ alarms: fakeAlarms(), stored: {} });
-  assert.equal(glue.installedListeners.length, 1, 'no runtime.onInstalled listener is registered');
-  await new Promise((r) => setTimeout(r, 0));
-  const before = glue.writes.length;
-  glue.installedListeners[0]({ reason: 'update', previousVersion: '1.9.1' });
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(glue.writes.slice(before), [{ deepseekDisplayMode: 'client' }]);
-  glue.installedListeners[0]({ reason: 'update', previousVersion: '1.9.1' });
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(glue.writes.length, before + 1, 'a stored value is never overwritten');
-  glue.installedListeners[0]({ reason: 'install' });
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(glue.writes.length, before + 1, 'a fresh install takes the new default');
-});

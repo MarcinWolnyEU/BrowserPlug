@@ -27,10 +27,8 @@ logger = logging.getLogger(__name__)
 # ONLY read-only actions belong here: an auto-retry re-sends the SAME request, so anything
 # that mutates browser/tab/window state, navigates, runs page code, or arms/disarms a monitor
 # must NEVER be in this set (re-sending it could double-apply the side effect). These are the
-# `calls.request("<action>")` call sites in server/tools/, filtered to the reads, plus a
-# few legacy read-only actions the protocol tests still exercise directly.
+# `calls.request("<action>")` call sites in server/tools/, filtered to the reads.
 IDEMPOTENT_ACTIONS = frozenset({
-    # -- reads reached by the v2 tool surface (server/tools/) -------------------------
     "tabs.list",                 # tabs(action="list")
     "tabs.active",               # active-tab read
     "windows.get_last_focused",  # window lookup (populate=False)
@@ -43,20 +41,11 @@ IDEMPOTENT_ACTIONS = frozenset({
     "requests.recent",           # requests(action="recent")
     "requests.list_captured",    # requests(action="list"): captured-request listing
     "requests.get_content",      # requests(action="get"): read a captured body
-    # -- legacy read-only actions still handled by background.js (protocol-level tests) -----
-    "tabs.captureVisibleTab",    # screenshot twin of tabs.screenshot
-    "content.text",              # legacy plain-text read
-    "content.get_text",
-    "content.html",              # legacy HTML read
-    "content.get_html",
-    "windows.list",
-    "windows.get",
-    "windows.get_current",
 })
 # Deliberately EXCLUDED (mutating / code-running / monitor-arming; never auto-retried):
-#   navigation.navigate, navigation.back/forward/reload/go/go_to_url,
-#   content.act, content.execute_script, tabs.create/close/switch/update/routing,
-#   windows.create/close/update/focus, requests.start_monitoring/stop_monitoring.
+#   navigation.navigate, content.act, content.execute_script,
+#   tabs.create/close/switch/routing, windows.create/close/update,
+#   requests.start_monitoring/stop_monitoring.
 # (The history.* actions left this list on 2026-08-03 with the history tool and its
 #  browser permission; content.read_clipboard went with the clipboard-read removal.)
 

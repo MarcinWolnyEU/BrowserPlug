@@ -833,24 +833,14 @@ class BrowserPlugServer:
         """File a finished call's verdict on its own record (call_telemetry.py)."""
         self.telemetry.record_call_outcome(tool_name, outcome, call)
 
-    def track_http_client(self, session_id, client, client_pid=None):
-        """Record/update an MCP HTTP client (called from the ASGI tracking wrapper).
-
-        client_pid: when set (forwarded by the stdio launcher via the
-        X-BrowserPlug-Client-Pid header), it identifies the real Claude Code process
-        behind the proxy. Without it we fall back to mapping the TCP peer port to
-        a PID (correct for direct HTTP clients).
-        """
-        client_identity.track_http_client(self.http_clients, session_id, client, client_pid)
-
     def note_http_client(self, session_id, client, client_pid=None):
-        """The loop-safe half of track_http_client: file the session's row and return it when
-        its identity still has to be looked up (http_endpoints runs that off the loop)."""
+        """File the session's row and return it when its identity still has to be looked up
+        (http_endpoints runs that off the loop)."""
         return client_identity.note_http_client(self.http_clients, session_id, client,
                                                 client_pid)
 
     def identify_http_client(self, entry, client, client_pid=None, on_peer_read=None):
-        """The blocking half of track_http_client: resolve who is behind `entry`."""
+        """Resolve who is behind `entry` (the blocking half; http_endpoints runs it on a worker)."""
         client_identity.identify_http_client(entry, client, client_pid, on_peer_read)
 
     def record_launcher_version(self, launcher_pid, version):

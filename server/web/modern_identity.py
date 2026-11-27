@@ -1,7 +1,7 @@
 """The key a 2026-07-28 request is filed under, since it carries no Mcp-Session-Id.
 
 Everything that follows a client through the tool layer is keyed on the session id: its
-Connections row (`track_http_client`), the record its tool calls open and receive their
+Connections row (`note_http_client`), the record its tool calls open and receive their
 verdict on (`CallTelemetry`, `[:8]` of the key plus the request id), and its browser
 selection (`routing.client_key`). A 2026-07-28 request has none, so without a key it gets
 no row, no `last_command`, no verdict, and every such client shares the "local" selection.

@@ -8,7 +8,7 @@ of that browser, which brands the registry entry.
 
 Everything is a plain synchronous function over psutil (imported inside each function, so
 a failed import degrades to an empty answer) and none of it keeps state. Callers can run
-them inline or hand them to an executor. `track_http_client` and the launcher-version
+them inline or hand them to an executor. `note_http_client` and the launcher-version
 helpers take the dict they update; the server owns those dicts.
 
 Nothing here imports server.py, and importing the module has no side effects.
@@ -680,22 +680,6 @@ def identify_http_client(entry, client, client_pid=None, on_peer_read=None):
         entry["identity_tried"] = None    # the session's next request may look again
 
 
-def track_http_client(http_clients, session_id, client, client_pid=None):
-    """Record/update an MCP HTTP client, looking its identity up inline.
-
-    client_pid: when set (forwarded by the stdio launcher via the
-    X-BrowserPlug-Client-Pid header), it identifies the real Claude Code process
-    behind the proxy. Without it we fall back to mapping the TCP peer port to
-    a PID (correct for direct HTTP clients).
-
-    The synchronous form, for callers that are not an event loop. The HTTP layer calls
-    `note_http_client` on the loop and `identify_http_client` on a worker instead.
-    """
-    entry = note_http_client(http_clients, session_id, client, client_pid)
-    if entry is not None:
-        identify_http_client(entry, client, client_pid)
-
-
 # How long a launcher's reported version outlives its last /health poll. The
 # launcher polls every TOOLS_POLL_SECONDS (3s) for its whole life, so anything
 # past this is a launcher that exited, and a dead launcher must not keep
@@ -726,8 +710,7 @@ def launcher_version(launcher_versions, launcher_pid):
 
 def connected_browser_pids(ws_port):
     """PIDs of browser process(es) (Firefox, a fork, or a Chromium browser) with an
-    ESTABLISHED connection to the WS port. (/health serves the result as `browser_pids`,
-    and still as the legacy `firefox_pids` for older options pages.)"""
+    ESTABLISHED connection to the WS port. (/health serves the result as `browser_pids`.)"""
     pids = set()
     try:
         import psutil

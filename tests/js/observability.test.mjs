@@ -913,8 +913,7 @@ test('windows.* refuses with a platform fact when there is no windows API', asyn
 });
 
 test('every windows action is covered, not just create', async () => {
-  for (const action of ['windows.list', 'windows.get', 'windows.get_current',
-                        'windows.get_last_focused', 'windows.close', 'windows.focus',
+  for (const action of ['windows.get_last_focused', 'windows.create', 'windows.close',
                         'windows.update']) {
     const h = loadWindowsHandler(false);
     await h.handleWindowsAction('w', action, {});
@@ -924,7 +923,7 @@ test('every windows action is covered, not just create', async () => {
 
 test('with a windows API the handler still does its job', async () => {
   const h = loadWindowsHandler(true);
-  await h.handleWindowsAction('w2', 'windows.list', {});
+  await h.handleWindowsAction('w2', 'windows.get_last_focused', {});
   assert.equal(h.sent.length, 1);
   assert.equal(h.sent[0].code, undefined, 'no refusal on a browser that has windows');
   assert.ok(h.sent[0].data, 'it answered with real data');

@@ -164,30 +164,6 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   try {
     switch (action) {
-      case 'extractText':
-        sendResponse({
-          text: document.body ? document.body.innerText : '',
-          title: document.title,
-          url: window.location.href
-        });
-        break;
-
-      case 'extractHTML':
-        sendResponse({
-          html: document.documentElement.outerHTML,
-          title: document.title,
-          url: window.location.href
-        });
-        break;
-
-      case 'getPageTitle':
-        sendResponse({ title: document.title });
-        break;
-
-      case 'getPageURL':
-        sendResponse({ url: window.location.href });
-        break;
-
       case 'flushConsole':
         // The background reads its console buffer only after this answers
         // (flushConsoleCapture in background.js). A subframe has no capture of its own.

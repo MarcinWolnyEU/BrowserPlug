@@ -139,6 +139,43 @@ async def test_tabs_open_window_with_a_navigation_error_fails(tools, server):
     assert oc and oc.get("failed"), oc
 
 
+ABORT_TEXT = ("request aborted - usually a newer navigation replaced it, or the tab was "
+              "stopped/closed [NS_BINDING_ABORTED = 2152398850]")
+OPEN_EVENTS = [{"ev": "commit", "url": "https://x.example/", "ms": 18},
+               {"ev": "error", "url": "https://x.example/", "ms": 20, "error": "Error code 2152398850"}]
+
+
+@pytest.mark.asyncio
+async def test_tabs_open_abort_prints_the_main_frame_events(tools, server):
+    server.set_response("tabs.create", {"tab": {
+        "id": 9, "windowId": 1, "url": "https://x.example/", "navPending": "https://x.example/",
+        "navError": ABORT_TEXT, "navEvents": OPEN_EVENTS}})
+    out, oc = await call(tools, "tabs", action="open", url="https://x.example/")
+    assert f"failed: {ABORT_TEXT}" in out
+    assert "\n  main-frame events: commit +18ms, abort +20ms" in out
+    assert oc and oc.get("failed"), oc
+
+
+@pytest.mark.asyncio
+async def test_tabs_open_window_abort_prints_the_main_frame_events(tools, server):
+    server.set_response("windows.create", {"window": {
+        "id": 2, "tabs": [{"id": 9, "url": "https://x.example/"}], "navPending": "https://x.example/",
+        "navError": ABORT_TEXT, "navEvents": OPEN_EVENTS}})
+    out, oc = await call(tools, "tabs", action="open", url="https://x.example/", new_window=True)
+    assert "\n  main-frame events: commit +18ms, abort +20ms" in out
+    assert oc and oc.get("failed"), oc
+
+
+@pytest.mark.asyncio
+async def test_tabs_open_other_net_errors_print_no_events(tools, server):
+    server.set_response("tabs.create", {"tab": {
+        "id": 9, "windowId": 1, "url": "about:neterror", "navPending": "https://nope.invalid/",
+        "navError": "unknown host - DNS could not resolve the domain [NS_ERROR_UNKNOWN_HOST]",
+        "navEvents": OPEN_EVENTS}})
+    out, _ = await call(tools, "tabs", action="open", url="https://nope.invalid/")
+    assert "main-frame events" not in out
+
+
 @pytest.mark.asyncio
 async def test_tabs_open_navigation_timeout_degrades(tools, server):
     server.set_response("tabs.create", {"tab": {

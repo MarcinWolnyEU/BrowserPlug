@@ -98,10 +98,13 @@ These are the user's standing instructions.
   model. `tests/unit/test_ws_token.py` scans the tree for token-shaped literals; a name the
   code spells as an identifier is exempt, so a new constant or variable name passes once the
   code defines it (a hyphenated name goes in `_HYPHENATED_NAMES`).
-- Bump all four version carriers (`shared-py/browserplug_shared/version.py`, both
-  `manifest.json` files, `package.json`) on every build you ask the user to install. Two
-  builds with one number make "I installed the latest one" unverifiable, and one stale
-  extension among several browsers looks exactly like a broken feature.
+- **Never change the version number on your own.** The four version carriers
+  (`shared-py/browserplug_shared/version.py`, both `manifest.json` files, `package.json`)
+  stay where they are until the user asks for a bump. That holds for a build you hand over,
+  a fix, a feature and a release step. When the user does ask, change all four together
+  (parity invariant H fails if one drifts) and rebuild. Builds therefore share a number, so
+  the version cannot tell you which build a browser runs: ask the user to reload the
+  extension after a rebuild, and check behaviour, not the number.
 
 ### Decisions that stand
 
@@ -195,8 +198,9 @@ MCP client ──stdio──▶ launcher/launcher.py (stdlib relay; launcher/std
 - Several browsers may be connected, a phone included; tab ids and snapshot refs belong to
   one. Before trusting a live check, confirm which browser answered (`browsers(action="use",
   …)` replies "Already on …" and changes nothing).
-- After an extension change, rebuild, bump the version, have the user reload it, and check
-  each browser's extension version in `server_info` before testing.
+- After an extension change, rebuild, have the user reload it, and check in `server_info`
+  that each browser's extension reconnected before testing. The version number does not
+  change between builds, so it cannot prove which build is loaded.
 - "No extension connection available" means no browser is connected: ask the user to press
   Reconnect in the popup. Do not start a browser yourself. A fresh profile has no extension,
   and a profile that has it would join the user's live server. On Windows even `chrome.exe

@@ -15,8 +15,7 @@ const BG_SRC = fs.readFileSync(
   new URL('../../extension-chromium/background.js', import.meta.url), 'utf-8');
 
 const ACTIONS = ['get_popup_state', 'get_options_state', 'get_storage_values',
-  'validate_ui_sync', 'refresh_ui_state', 'visit_url', 'visit_multiple_urls',
-  'create_test_tabs'].map((a) => `test.${a}`);
+  'validate_ui_sync'].map((a) => `test.${a}`);
 
 // buildConfig: the value to expose as BUILD_CONFIG, or the string 'undeclared'.
 function load(buildConfig) {
@@ -33,9 +32,7 @@ function load(buildConfig) {
     function sendResponse() {}
     const stub = (n) => async () => { ran.push(n); };
     const handleGetPopupState = stub('popup'), handleGetOptionsState = stub('options'),
-      handleGetStorageValues = stub('storage'), handleValidateUISync = stub('validate'),
-      handleRefreshUIState = stub('refresh'), handleVisitURL = stub('visit'),
-      handleVisitMultipleURLs = stub('visitMany'), handleCreateTestTabs = stub('tabs');
+      handleGetStorageValues = stub('storage'), handleValidateUISync = stub('validate');
     ${decl}
     ${block}
     return { handleTestAction, testHelpersEnabled, ran, errors };
@@ -63,8 +60,8 @@ test('anything short of testMode: true keeps the gate shut', async () => {
 test('the harness bake (testMode: true) runs the handlers', async () => {
   const m = load({ wsPort: 7777, wsHost: 'localhost', testMode: true });
   await m.handleTestAction('r3', 'test.get_popup_state', {});
-  await m.handleTestAction('r4', 'test.create_test_tabs', {});
-  assert.deepEqual(m.ran, ['popup', 'tabs']);
+  await m.handleTestAction('r4', 'test.validate_ui_sync', {});
+  assert.deepEqual(m.ran, ['popup', 'validate']);
   assert.deepEqual(m.errors, []);
   await m.handleTestAction('r5', 'test.nope', {});
   assert.equal(m.errors[0].code, 'UNKNOWN_ACTION');

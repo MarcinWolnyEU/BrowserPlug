@@ -948,10 +948,11 @@ def test_a_request_without_a_session_or_a_way_to_name_its_client_files_nothing()
     assert entry is None and "s1" in clients, "recorded, but nothing to look up"
 
 
-def test_the_synchronous_form_still_files_a_fully_identified_row():
+def test_noting_then_identifying_files_a_fully_identified_row():
     clients = {}
     with patch.object(client_identity, "resolve_client_chain", lambda port: (88, None)), \
             patch.object(client_identity, "describe_pid",
                          lambda pid: {"pid": pid, "friendly": "Codex CLI"}):
-        client_identity.track_http_client(clients, "s1", ("127.0.0.1", 5000))
+        entry = client_identity.note_http_client(clients, "s1", ("127.0.0.1", 5000))
+        client_identity.identify_http_client(entry, ("127.0.0.1", 5000))
     assert clients["s1"]["pid"] == 88 and clients["s1"]["friendly"] == "Codex CLI"

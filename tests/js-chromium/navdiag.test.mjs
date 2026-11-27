@@ -205,10 +205,13 @@ function loadNavEvents() {
     // wakeSettle sits beside waitForSettle, outside this slice; record who would be woken.
     const WOKEN = [];
     const wakeSettle = (tabId) => { WOKEN.push(tabId); };
+    // humanizeNetError sits in the net-error table, outside both slices.
+    const humanizeNetError = (code) => 'humanized ' + code;
     ${BG_SRC.slice(start, end)}
     ${BG_SRC.slice(dStart, dEnd)}
     return {
-      navigationError, isNavAbort, abortAwaitingCompletion, navEventsSince, WOKEN,
+      navigationError, isNavAbort, abortAwaitingCompletion, navEventsSince, noteOpenFailure,
+      mainFrameOutcome, setLog: (log) => { TAB_REQUESTS.set(7, log); }, WOKEN,
       commit: (url, timeStamp) => L.committed({ tabId: 7, frameId: 0, url, timeStamp }),
       error: (url, error, timeStamp) => L.error({ tabId: 7, frameId: 0, url, error, timeStamp }),
       done: (url, timeStamp) => L.completed({ tabId: 7, frameId: 0, url, timeStamp }),
@@ -296,6 +299,102 @@ test('a request-log error still reports when the replaced load\'s abort is set a
   m.error('about:blank', ABORT, T0 + 610);
   assert.equal(m.navigationError(m.nav(), T0, { reqError: 'net::ERR_CONNECTION_RESET' }, TARGET),
     'net::ERR_CONNECTION_RESET');
+});
+
+// ---- a replaced load the request log calls net::ERR_FAILED -----------------------------
+// Navigating away from a slow page and then again: the first navigate lands on the second
+// page, webNavigation reports the replaced load as net::ERR_ABORTED (cleared by the new
+// commit), and the request log often records that same load as the generic net::ERR_FAILED.
+// General rule: a request-level ERR_FAILED is an abort when webNavigation saw ERR_ABORTED
+// for the same URL since the navigation began.
+
+const FAILED = 'net::ERR_FAILED';
+const SLOW = 'https://slow.example/page';
+
+test('ERR_FAILED in the request log plus ERR_ABORTED for the same URL is an abort', () => {
+  const m = loadNavEvents();
+  m.error(SLOW, ABORT, T0 + 8);
+  m.commit(TARGET, T0 + 30);
+  assert.equal(m.nav().lastNavError, null, 'the new commit cleared the live error');
+  assert.equal(m.navigationError(m.nav(), T0, { reqError: FAILED, reqErrorUrl: SLOW }, SLOW), ABORT);
+});
+
+test('the abort is told by the URL alone, not by which navigation asked for it', () => {
+  const m = loadNavEvents();
+  m.error(SLOW + '#frag', ABORT, T0 + 8);
+  m.commit(TARGET, T0 + 30);
+  assert.equal(m.navigationError(m.nav(), T0, { reqError: FAILED, reqErrorUrl: SLOW }, null), ABORT);
+});
+
+test('ERR_FAILED alone, with no ERR_ABORTED seen, is still a failure', () => {
+  const m = loadNavEvents();
+  m.commit(TARGET, T0 + 30);
+  assert.equal(m.navigationError(m.nav(), T0, { reqError: FAILED, reqErrorUrl: SLOW }, SLOW), FAILED);
+  assert.equal(m.navigationError(m.nav(), T0, { reqError: FAILED }, SLOW), FAILED,
+    'a request with no URL cannot be matched to an abort');
+});
+
+test('an ERR_ABORTED for a different URL does not turn ERR_FAILED into an abort', () => {
+  const m = loadNavEvents();
+  m.error('https://other.example/', ABORT, T0 + 8);
+  m.commit(TARGET, T0 + 30);
+  assert.equal(m.navigationError(m.nav(), T0, { reqError: FAILED, reqErrorUrl: SLOW }, SLOW), FAILED);
+});
+
+test('an ERR_ABORTED from before the navigation began does not count', () => {
+  const m = loadNavEvents();
+  m.error(SLOW, ABORT, T0 - 500);
+  m.commit(TARGET, T0 + 30);
+  assert.equal(m.navigationError(m.nav(), T0, { reqError: FAILED, reqErrorUrl: SLOW }, SLOW), FAILED);
+});
+
+test('only ERR_FAILED is read that way: another request error keeps its own name', () => {
+  const m = loadNavEvents();
+  m.error(SLOW, ABORT, T0 + 8);
+  m.commit(TARGET, T0 + 30);
+  assert.equal(m.navigationError(m.nav(),
+    T0, { reqError: 'net::ERR_CONNECTION_RESET', reqErrorUrl: SLOW }, SLOW), 'net::ERR_CONNECTION_RESET');
+});
+
+test('from the request log: the errored request\'s URL reaches navigationError, and the events print', () => {
+  const m = loadNavEvents();
+  m.setLog([
+    { type: 'main_frame', method: 'GET', id: 'r1', url: SLOW, start: T0 + 1, error: FAILED },
+    { type: 'main_frame', method: 'GET', id: 'r2', url: TARGET, start: T0 + 20, status: 200 },
+  ]);
+  m.error(SLOW, ABORT, T0 + 8);
+  m.commit(TARGET, T0 + 30);
+  const outcome = m.mainFrameOutcome(7, T0);
+  assert.equal(outcome.reqErrorUrl, SLOW);
+  const rawErr = m.navigationError(m.nav(), T0, outcome, SLOW);
+  assert.equal(m.isNavAbort(rawErr), true, 'so navigate sets superseded and the abort wording');
+  assert.deepEqual(m.navEventsSince(m.nav(), T0).map(e => e.ev), ['error', 'commit']);
+});
+
+// ---- tabs.create and windows.create carry the main-frame events too ----------------------
+
+test('an open that ends in a net error carries the main-frame events since it began', () => {
+  const m = loadNavEvents();
+  m.error(TARGET, ABORT, T0 + 20);
+  const tab = {};
+  m.noteOpenFailure(tab, { committed: false, navError: ABORT }, TARGET, 7, T0);
+  assert.equal(tab.navPending, TARGET);
+  assert.equal(tab.navError, 'humanized ' + ABORT);
+  assert.deepEqual(tab.navEvents, [{ ev: 'error', url: TARGET, ms: 20, error: ABORT }]);
+  assert.equal(tab.navTimedOut, undefined);
+});
+
+test('an open that timed out names the pending URL and no events', () => {
+  const m = loadNavEvents();
+  const win = {};
+  m.noteOpenFailure(win, { committed: false, timedOut: true }, TARGET, 7, T0);
+  assert.deepEqual(win, { navPending: TARGET, navTimedOut: true });
+});
+
+test('tabs.create and windows.create hand their result to noteOpenFailure', () => {
+  const src = BG_SRC.split('\r\n').join('\n');
+  assert.match(src, /if \(!c\.committed\) noteOpenFailure\(newTab, c, data\.url, newTab\.id, t0commit\);/);
+  assert.match(src, /if \(!c\.committed\) noteOpenFailure\(newWindow, c, data\.url, wtab\.id, t0winCommit\);/);
 });
 
 test('an error from before the navigation began is ignored, as before', () => {

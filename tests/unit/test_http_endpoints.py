@@ -336,7 +336,7 @@ async def test_require_token_answers_403_only_when_unsigned():
 
 
 # --- 2026-10-02: client identity is looked up off the loop ---------------------------------
-# Finding server-era-1 and the 14 minute freeze: track_http_client walked the process table
+# Finding server-era-1 and the 14 minute freeze: the client lookup walked the process table
 # and masked the peer's argv on the uvicorn loop, once per session (and, for a 2026-07-28
 # client with no connection id, once per TCP connection).
 

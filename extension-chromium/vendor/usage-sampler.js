@@ -42,14 +42,50 @@
   //                   TTL boundary and a millisecond of drift either way would otherwise
   //                   decide whether the sample happens at all.
   // opts.onError    : reporter for a failed sample or a refused alarm call.
+  // opts.storage    : a storage.local-like {get, set}, optional. Holds the back-off below, so
+  //                   an MV3 worker evicted between two ticks does not forget it.
+  //
+  // Back-off: a sample that answers `signedOut` makes the clock skip the next 1, then 2, 4,
+  // ... ticks of that provider, up to about an hour of wall time. A profile with no session
+  // would otherwise fire the same failing request at the full rate for ever. The first
+  // answer that is not signed out, a change to that provider's alarm, or wake(key) (the
+  // popup or Options asking for a reading) puts it back to the full rate.
+  const BACKOFF_KEY = 'usageSamplerBackoff';
+  const BACKOFF_CAP_MINUTES = 60;
+
   function createSampler(opts) {
     opts = opts || {};
     const alarms = opts.alarms || null;
+    const storage = opts.storage || null;
     const providers = (opts.providers || []).slice();
     const onError = opts.onError || (() => {});
     const byAlarm = new Map();
     const armed = new Map(); // key -> period in minutes, for whoever asks what is running
+    const backoff = new Map(); // key -> { gap, skip } ticks, see above
     for (const p of providers) byAlarm.set(alarmName(p.key), p);
+
+    // Null once the stored back-off is read (at once when there is no storage).
+    let loading = null;
+    if (storage) {
+      loading = Promise.resolve()
+        .then(() => storage.get(BACKOFF_KEY))
+        .then((r) => {
+          const saved = (r && r[BACKOFF_KEY]) || {};
+          for (const p of providers) {
+            const s = saved[p.key];
+            if (s && s.gap >= 1 && s.skip >= 0) backoff.set(p.key, { gap: s.gap, skip: s.skip });
+          }
+        })
+        .catch(onError)
+        .then(() => { loading = null; });
+    }
+    const whenLoaded = (fn) => { if (loading) loading.then(fn); else fn(); };
+    function save() {
+      if (!storage) return;
+      try {
+        Promise.resolve(storage.set({ [BACKOFF_KEY]: Object.fromEntries(backoff) })).catch(onError);
+      } catch (e) { onError(e); }
+    }
 
     if (alarms && alarms.onAlarm && alarms.onAlarm.addListener) {
       alarms.onAlarm.addListener((alarm) => { handleAlarm(alarm && alarm.name); });
@@ -58,11 +94,33 @@
     function handleAlarm(name) {
       const provider = byAlarm.get(name);
       if (!provider) return false; // somebody else's alarm; the watchdog's, normally
-      try {
-        const p = provider.sample();
-        if (p && p.catch) p.catch(onError);
-      } catch (e) { onError(e); }
+      whenLoaded(() => tick(provider));
       return true;
+    }
+
+    function tick(provider) {
+      const state = backoff.get(provider.key);
+      if (state && state.skip > 0) { state.skip--; save(); return; }
+      let p;
+      try { p = provider.sample(); } catch (e) { onError(e); return; }
+      Promise.resolve(p).then((r) => noteAnswer(provider.key, !!(r && r.signedOut)), onError);
+    }
+
+    function noteAnswer(key, signedOut) {
+      if (!signedOut) { wake(key); return; }
+      // The cap counts skipped ticks plus the one sampled, so a 5-minute clock backs off to
+      // one sample an hour; a clock already at 60 minutes has no room to back off.
+      const room = Math.floor(BACKOFF_CAP_MINUTES / (armed.get(key) || 5)) - 1;
+      const previous = backoff.get(key);
+      const gap = Math.min(previous ? previous.gap * 2 : 1, room);
+      if (gap < 1) return;
+      backoff.set(key, { gap, skip: gap });
+      save();
+    }
+
+    // Back to the full rate for one provider.
+    function wake(key) {
+      whenLoaded(() => { if (backoff.delete(key)) save(); });
     }
 
     // Bring the alarms in line with the settings, which are keyed by provider key:
@@ -92,6 +150,7 @@
       const name = alarmName(key);
       if (minutes === null) {
         armed.delete(key);
+        wake(key);
         try { await alarms.clear(name); } catch (e) { onError(e); }
         return;
       }
@@ -107,18 +166,20 @@
       try {
         alarms.create(name, { delayInMinutes: minutes, periodInMinutes: minutes });
         armed.set(key, minutes);
+        wake(key);   // a new schedule starts at the full rate
       } catch (e) { onError(e); }
     }
 
     return {
       apply,
       handleAlarm,
+      wake,
       armedPeriod: (key) => (armed.has(key) ? armed.get(key) : null),
     };
   }
 
   // popup.js and options.js read a stored display mode they do not know (a newer build's, a
-  // hand edit) as the card's shipped default. The clock has to read it the same way, or a
+  // hand edit, the retired 'always') as the card's shipped default. The clock has to read it the same way, or a
   // card that both pages show as Disabled would still be polled in the background.
   // `defaults` is the background's USAGE_SETTINGS_DEFAULTS; only its *DisplayMode keys are
   // looked at. Returns a copy.
@@ -131,52 +192,7 @@
     return out;
   }
 
-  // Builds up to 1.9.1 had a third display mode, 'always': a line of its own above
-  // Connections, plus this clock. The Usage tab replaced the line and the clock became a
-  // checkbox, so a stored 'always' turns into 'tab' (it never drew on the rows either)
-  // with the checkbox ticked. DeepSeek is a local clock with nothing to fetch, so it has
-  // no checkbox. Returns the keys to write back, or null when nothing needs migrating.
-  const LEGACY_ALWAYS = {
-    anthropicDisplayMode: 'anthropicBackgroundRefresh',
-    openaiDisplayMode: 'openaiBackgroundRefresh',
-    deepseekDisplayMode: null,
-  };
-  const LEGACY_MODE_KEYS = Object.keys(LEGACY_ALWAYS);
-
-  function legacyModePatch(stored) {
-    const patch = {};
-    for (const [modeKey, clockKey] of Object.entries(LEGACY_ALWAYS)) {
-      if (!stored || stored[modeKey] !== 'always') continue;
-      patch[modeKey] = 'tab';
-      if (clockKey) patch[clockKey] = true;
-    }
-    return Object.keys(patch).length ? patch : null;
-  }
-
-  // Up to 1.9.1 the DeepSeek clock defaulted to 'client'; it now defaults to 'disabled'. A
-  // profile that never saved the setting showed the clock only through that default, so an
-  // update from such a build writes 'client' down instead of quietly removing the clock. A
-  // fresh install, an update from a later build and a saved choice are left alone.
-  // `stored` is storage.sync's answer for ['deepseekDisplayMode']. Returns the keys to
-  // write, or null.
-  const LAST_DEEPSEEK_CLIENT_DEFAULT = [1, 9, 1];
-  function versionAtMost(version, max) {
-    if (!/^\d+(\.\d+)*$/.test(String(version || ''))) return false;
-    const parts = String(version).split('.').map(Number);
-    for (let i = 0; i < Math.max(parts.length, max.length); i++) {
-      const a = parts[i] || 0, b = max[i] || 0;
-      if (a !== b) return a < b;
-    }
-    return true;
-  }
-  function legacyDefaultsPatch(previousVersion, stored) {
-    if (!versionAtMost(previousVersion, LAST_DEEPSEEK_CLIENT_DEFAULT)) return null;
-    if (stored && typeof stored.deepseekDisplayMode === 'string') return null;
-    return { deepseekDisplayMode: 'client' };
-  }
-
   globalThis.UsageSampler = {
-    ALARM_PREFIX, alarmName, refreshMinutesOf, createSampler, withKnownModes, LEGACY_MODE_KEYS,
-    legacyModePatch, legacyDefaultsPatch,
+    ALARM_PREFIX, alarmName, refreshMinutesOf, createSampler, withKnownModes,
   };
 })();

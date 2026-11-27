@@ -44,10 +44,6 @@ class UiTestHelpers:
         return await self._call("validate", "test.validate_ui_sync",
                                 {"expectedValues": expected_values}, timeout)
 
-    async def refresh_ui_state(self, timeout: float = 30.0) -> Dict[str, Any]:
-        """Ask the extension to re-read its UI state."""
-        return await self._call("refresh", "test.refresh_ui_state", {}, timeout)
-
     async def test_storage_sync_workflow(self, test_values: Dict[str, Any],
                                          timeout: float = 30.0) -> Dict[str, Any]:
         """Read storage, popup and options state, then validate them against `test_values`."""

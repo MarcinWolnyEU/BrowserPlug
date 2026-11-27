@@ -12,8 +12,7 @@
  *   - content.js (ISOLATED world): batches console entries to the SW (20-entry / 300ms
  *     flush, 500/load cap — the SAME constants as gecko), pulls the armed monitor state at
  *     document_start and forwards SW arm/disarm broadcasts into the MAIN world, and relays
- *     captured bodies up as `net_body`. It also owns the CSP-immune error listeners and the
- *     legacy extractText/HTML/Title/URL messages.
+ *     captured bodies up as `net_body`. It also owns the CSP-immune error listeners.
  *
  * Both files run in a jsdom window; message events are dispatched with source===window to
  * model the shared window.postMessage bus, console handovers are dispatched as the event
@@ -325,19 +324,6 @@ test('an SW browserplug_monitor_state broadcast is forwarded into the MAIN world
   const fwd = iso.posted.find(p => p && p.__browserplugMonitorState && p.armed === true);
   assert.ok(fwd, 'the arm/disarm broadcast reaches the MAIN-world wrapper');
   assert.deepEqual(fwd.urlPatterns, ['*']);
-});
-
-test('the legacy extract messages still answer (getPageTitle / getPageURL / extractHTML)', async () => {
-  const iso = loadIsolatedWorld();
-  const title = await iso.fireOnMessage({ action: 'getPageTitle' });
-  assert.equal(title.title, 'Relay Page');
-
-  const url = await iso.fireOnMessage({ action: 'getPageURL' });
-  assert.equal(url.url, 'https://x.test/page');
-
-  const html = await iso.fireOnMessage({ action: 'extractHTML' });
-  assert.match(html.html, /<p>hi there<\/p>/);
-  assert.equal(html.title, 'Relay Page');
 });
 
 test('an unknown content action reports an error rather than silently succeeding', async () => {

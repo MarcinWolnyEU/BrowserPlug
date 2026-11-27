@@ -433,7 +433,7 @@ async def test_the_sdk_auto_client_ends_on_2026_07_28_with_a_keyed_connection(mo
                 assert "server_info" in {t.name for t in tools.tools}
     assert set(seen_versions) == {b"2026-07-28"}, "no handshake-era request was made"
     assert list(server.http_clients) == [modern_identity.peer_key(PEER)], (
-        "the connection reached track_http_client under its key")
+        "the connection was filed under its key")
 
 
 @pytest.mark.asyncio
@@ -454,7 +454,7 @@ async def test_under_handshake_the_sdk_auto_client_falls_back_to_a_session(monke
                 tools = await client.list_tools()
                 assert "server_info" in {t.name for t in tools.tools}
     assert b"2026-07-28" in seen_versions, "the client never probed; the test proves nothing"
-    assert server.http_clients, "the session never reached track_http_client"
+    assert server.http_clients, "the session never filed a client row"
     assert modern_identity.peer_key(PEER) not in server.http_clients, (
         "a handshake session is keyed by its session id, never by its connection")
 

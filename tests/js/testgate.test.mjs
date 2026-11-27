@@ -15,8 +15,7 @@ const BG_SRC = fs.readFileSync(
   new URL('../../extension-gecko/background.js', import.meta.url), 'utf-8');
 
 const ACTIONS = ['get_popup_state', 'get_options_state', 'get_storage_values',
-  'validate_ui_sync', 'refresh_ui_state', 'visit_url', 'visit_multiple_urls',
-  'create_test_tabs'].map((a) => `test.${a}`);
+  'validate_ui_sync'].map((a) => `test.${a}`);
 
 function load(storage, { throws = false } = {}) {
   const start = BG_SRC.indexOf('// Test helper action handler');
@@ -35,9 +34,7 @@ function load(storage, { throws = false } = {}) {
     function sendResponse() {}
     const stub = (n) => async () => { ran.push(n); };
     const handleGetPopupState = stub('popup'), handleGetOptionsState = stub('options'),
-      handleGetStorageValues = stub('storage'), handleValidateUISync = stub('validate'),
-      handleRefreshUIState = stub('refresh'), handleVisitURL = stub('visit'),
-      handleVisitMultipleURLs = stub('visitMany'), handleCreateTestTabs = stub('tabs');
+      handleGetStorageValues = stub('storage'), handleValidateUISync = stub('validate');
     ${block}
     return { handleTestAction, testHelpersEnabled, ran, errors };
   `)(storage, throws);
@@ -64,7 +61,7 @@ test('a half-seeded or default-port profile does not open the gate', async () =>
 
 test('an unreadable storage fails closed', async () => {
   const m = load({ testPort: 7777, testHostname: 'localhost' }, { throws: true });
-  await m.handleTestAction('r2', 'test.visit_url', { url: 'https://example.org/' });
+  await m.handleTestAction('r2', 'test.get_storage_values', {});
   assert.equal(m.errors[0].code, 'TEST_ACTIONS_UNSUPPORTED');
   assert.deepEqual(m.ran, []);
 });
@@ -72,8 +69,8 @@ test('an unreadable storage fails closed', async () => {
 test('the harness-seeded profile (testPort + testHostname) runs the handlers', async () => {
   const m = load({ testPort: 7777, testHostname: 'localhost' });
   await m.handleTestAction('r3', 'test.get_popup_state', {});
-  await m.handleTestAction('r4', 'test.create_test_tabs', {});
-  assert.deepEqual(m.ran, ['popup', 'tabs']);
+  await m.handleTestAction('r4', 'test.validate_ui_sync', {});
+  assert.deepEqual(m.ran, ['popup', 'validate']);
   assert.deepEqual(m.errors, []);
   await m.handleTestAction('r5', 'test.nope', {});
   assert.equal(m.errors[0].code, 'UNKNOWN_ACTION', 'an enabled build still rejects unknown test actions');

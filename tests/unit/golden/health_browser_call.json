@@ -43,7 +43,6 @@
       "connected_at": "2026-09-29 11:10:00",
       "last_activity": "2026-09-29 11:59:56",
       "browser_pid": 111,
-      "firefox_pid": 111,
       "remote_addr": "127.0.0.1",
       "is_remote": false,
       "platform": {
@@ -82,7 +81,6 @@
       "connected_at": "2026-09-29 12:00:00",
       "last_activity": "2026-09-29 12:00:00",
       "browser_pid": null,
-      "firefox_pid": null,
       "remote_addr": "192.168.0.7",
       "is_remote": true,
       "platform": {
@@ -121,9 +119,6 @@
   },
   "tools_signature": "sig-1",
   "browser_pids": [
-    111
-  ],
-  "firefox_pids": [
     111
   ],
   "browser_major": 152,

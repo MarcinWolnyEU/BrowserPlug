@@ -205,10 +205,12 @@ function loadNavEvents() {
     // wakeSettle sits beside waitForSettle, outside this slice; record who would be woken.
     const WOKEN = [];
     const wakeSettle = (tabId) => { WOKEN.push(tabId); };
+    // humanizeNetError sits in the net-error table, outside both slices.
+    const humanizeNetError = (code) => 'humanized ' + code;
     ${BG_SRC.slice(start, end)}
     ${BG_SRC.slice(dStart, dEnd)}
     return {
-      navigationError, isNavAbort, abortAwaitingCompletion, navEventsSince, WOKEN,
+      navigationError, isNavAbort, abortAwaitingCompletion, navEventsSince, noteOpenFailure, WOKEN,
       commit: (url, timeStamp) => L.committed({ tabId: 7, frameId: 0, url, timeStamp }),
       error: (url, error, timeStamp) => L.error({ tabId: 7, frameId: 0, url, error, timeStamp }),
       done: (url, timeStamp) => L.completed({ tabId: 7, frameId: 0, url, timeStamp }),
@@ -396,6 +398,61 @@ test('a reported net error carries the main-frame events in arrival order', () =
     { ev: 'commit', url: TARGET, ms: 586 },
     { ev: 'error', url: TARGET, ms: 601, error: ABORT },
   ]);
+});
+
+// ---- the shared block's net::ERR_FAILED rule (Chrome's spelling) --------------------------
+// Firefox's request log names its aborts, so the rule never fires on its own errors; the block
+// is the same in both trees, and its Chrome-only branch behaves as the chromium twin pins.
+
+test('a request-level net::ERR_FAILED is an abort only when webNavigation aborted the same URL', () => {
+  const m = loadNavEvents();
+  m.error(TARGET, ABORT, T0 + 8);
+  m.commit('https://example.com/', T0 + 30);
+  const failed = (url) => ({ reqError: 'net::ERR_FAILED', reqErrorUrl: url });
+  assert.equal(m.navigationError(m.nav(), T0, failed(TARGET), TARGET), 'net::ERR_ABORTED');
+  assert.equal(m.navigationError(m.nav(), T0, failed('https://other.test/'), TARGET), 'net::ERR_FAILED');
+  assert.equal(m.navigationError(m.nav(), T0,
+    { reqError: 'NS_ERROR_NET_RESET', reqErrorUrl: TARGET }, TARGET), 'NS_ERROR_NET_RESET');
+});
+
+// ---- tabs.create and windows.create carry the same events -------------------------------
+// An open that fails reports its net error through noteOpenFailure, which adds the events
+// since the open began; the server prints them under an abort (`main-frame events:`).
+
+test('an open that ends in a net error carries the main-frame events since it began', () => {
+  const m = loadNavEvents();
+  m.commit('about:blank', T0 - 300);
+  m.commit(TARGET, T0 + 18);
+  m.error(TARGET, ABORT, T0 + 20);
+  const tab = {};
+  m.noteOpenFailure(tab, { committed: false, navError: ABORT }, TARGET, 7, T0);
+  assert.equal(tab.navPending, TARGET);
+  assert.equal(tab.navError, 'humanized ' + ABORT);
+  assert.deepEqual(tab.navEvents, [
+    { ev: 'commit', url: TARGET, ms: 18 },
+    { ev: 'error', url: TARGET, ms: 20, error: ABORT },
+  ]);
+  assert.equal(tab.navTimedOut, undefined);
+});
+
+test('an open that timed out names the pending URL and no events', () => {
+  const m = loadNavEvents();
+  const win = {};
+  m.noteOpenFailure(win, { committed: false, timedOut: true }, TARGET, 7, T0);
+  assert.deepEqual(win, { navPending: TARGET, navTimedOut: true });
+});
+
+test('an open on a tab with no recorded events reports an empty list, not a throw', () => {
+  const m = loadNavEvents();
+  const tab = {};
+  m.noteOpenFailure(tab, { committed: false, navError: UNKNOWN_HOST }, TARGET, 999, T0);
+  assert.deepEqual(tab.navEvents, []);
+});
+
+test('tabs.create and windows.create hand their result to noteOpenFailure', () => {
+  const src = BG_SRC.split('\r\n').join('\n');
+  assert.match(src, /if \(!c\.committed\) noteOpenFailure\(newTab, c, data\.url, newTab\.id, t0commit\);/);
+  assert.match(src, /if \(!c\.committed\) noteOpenFailure\(newWindow, c, data\.url, wtab\.id, t0winCommit\);/);
 });
 
 test('a commit and a finished load wake a sleeping settle', () => {

@@ -14,7 +14,7 @@
  *     carrying the error text, named by its class ("SyntaxError: ..."), in both worlds;
  *   - a result executeScript cannot clone stops the retry loop at once, because the
  *     script already ran, and the count in the message is the attempts actually made;
- *   - the content.execute handler reports the envelope's error as SCRIPT_ERROR.
+ *   - the content.execute_script handler reports the envelope's error as SCRIPT_ERROR.
  *
  * Gecko only: Chromium runs code strings through userScripts.execute, which returns a
  * script's own throw as InjectionResult.error without any retry loop.
@@ -131,8 +131,8 @@ test('a transient injection failure is still retried, and the count says how oft
   assert.equal(m.calls.length, 3);
 });
 
-test('the content.execute handler reports the envelope error and the clone refusal as SCRIPT_ERROR', () => {
-  const handler = slice("case 'content.execute':", "case 'content.read':");
+test('the content.execute_script handler reports the envelope error and the clone refusal as SCRIPT_ERROR', () => {
+  const handler = slice("case 'content.execute_script':", "case 'content.read':");
   assert.match(handler, /code: evalWrapperCode\(data\.script, data\.world\)/,
     'the handler injects the wrapper this file tests');
   assert.match(handler, /first\.__browserplugEval && *\n? *first\.error !== undefined/);

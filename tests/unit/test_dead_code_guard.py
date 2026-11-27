@@ -16,6 +16,7 @@ REMOVED = [
     ("server.web.peer_owner", "peer_is_foreign"),
     ("server.reporting.reports.SnapshotCache", "invalidate"),
     ("server.browsers.routing_notice.RoutingMemory", "forget"),
+    ("server.reporting.client_identity", "track_http_client"),
 ]
 
 

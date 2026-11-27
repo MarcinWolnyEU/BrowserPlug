@@ -116,8 +116,9 @@ Disabled stops the requests too.
 Signed out of a provider's site, its panel shows nothing (Anthropic keeps its peak-hours
 clock). If the browser's GitHub account differs from VS Code's, the Copilot row says "other
 account". A reading is cached for the card's refresh rate (5 minutes). "Query every N min to
-update the usage progress bar" (off by default) refreshes it with nothing on screen, at one
-request per interval even when signed out.
+update the usage progress bar" (off by default) refreshes it with nothing on screen. While
+you are signed out of that site it asks less often (every 2nd, 3rd, 5th tick and so on, down
+to about once an hour) and goes back to the full rate once you are signed in, or when you open the popup or press Re-check.
 
 Kilo CLI, pi and GitHub Copilot Chat rows also show a badge with the session's provider and
 model, read by the server from those clients' log files. Clear "Load Kilo session details from

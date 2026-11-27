@@ -369,30 +369,6 @@ test('a server that keeps rejecting us does NOT become a fetch loop', async () =
   assert.ok(m.errors.some(e => /Gave up|backing off/i.test(e)), 'and says so');
 });
 
-test('the same token coming back a second time is not retried forever', async () => {
-  // The server hands out a token and then rejects it anyway (a bug, or a server that
-  // rotated mid-flight). Refetching cannot help — stop pulling.
-  const token = mintToken();
-  const m = loadModule({ responses: [{ body: { token } }, { body: { token } }] });
-
-  m.connectToMCPServer();
-  m.sockets[0].fireOpen();
-  await settle();
-  m.sockets[0].fireClose(4401, reasonFor());
-  await settle();
-  assert.equal(m.sockets.length, 2, 'first fetch -> reconnect');
-
-  m.sockets[1].fireOpen();
-  await settle();
-  m.sockets[1].fireClose(4401, reasonFor());   // rejected again, with the very same token
-  await settle();
-
-  assert.equal(m.deps.fetches.length, 2);
-  assert.equal(m.sockets.length, 2, 'no third connect attempt was fired off immediately');
-  assert.equal(m.reconnectTimersLive(), 1, 'backoff instead');
-  assert.ok(m.errors.some(e => /rejected the very token/i.test(e)));
-});
-
 test('a failed fetch stores nothing and backs off', async () => {
   for (const response of [{ throws: 'connection refused' }, { ok: false, status: 500 },
                           { body: {} }, { body: { token: '' } }]) {

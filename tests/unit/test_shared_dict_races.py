@@ -1,6 +1,6 @@
 """Cross-thread shared tables (review A-F3 leftovers, chain X3).
 
-`http_clients` is filled on the uvicorn thread (track_http_client, per MCP request) and
+`http_clients` is filled on the uvicorn thread (note_http_client, per MCP request) and
 read on report-building threads and the WebSocket thread (/health, get_connections). The
 health report used to walk its live `.values()` view inside a comprehension, so an insert
 on the other thread during the walk raised "dictionary changed size during iteration" and
@@ -84,7 +84,10 @@ def test_two_first_requests_of_one_session_keep_one_entry(server):
         return 4242, None
 
     def run(entry_sink):
-        client_identity.track_http_client(server.http_clients, "sid-1", ("127.0.0.1", 5000))
+        entry = client_identity.note_http_client(
+            server.http_clients, "sid-1", ("127.0.0.1", 5000))
+        if entry is not None:
+            client_identity.identify_http_client(entry, ("127.0.0.1", 5000))
         entry_sink.append(server.http_clients["sid-1"])
 
     seen = []

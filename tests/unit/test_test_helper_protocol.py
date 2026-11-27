@@ -99,13 +99,6 @@ class MockWebSocket:
                 },
                 "issues": []
             }
-        elif action == "test.refresh_ui_state":
-            response["data"] = {
-                "refreshed": True,
-                "popupStateUpdated": True,
-                "optionsStateUpdated": True,
-                "timestamp": datetime.now().isoformat()
-            }
         else:
             response["type"] = "error"
             response["data"] = {
@@ -248,23 +241,6 @@ class TestTestHelperProtocol:
         assert "issues" in result
         
     @pytest.mark.asyncio
-    async def test_refresh_ui_state_message_format(self, mock_server):
-        """Test refresh_ui_state generates correct message format"""
-        server, mock_ws = mock_server
-        
-        result = await UiTestHelpers(server).refresh_ui_state()
-        
-        # Verify request format
-        request = mock_ws.sent_messages[0]
-        assert request["action"] == "test.refresh_ui_state"
-        assert request["data"] == {}
-        
-        # Verify response format
-        assert result["refreshed"] == True
-        assert result["popupStateUpdated"] == True
-        assert result["optionsStateUpdated"] == True
-        
-    @pytest.mark.asyncio
     async def test_test_storage_sync_workflow(self, mock_server):
         """Test complete storage sync workflow"""
         server, mock_ws = mock_server
@@ -324,7 +300,7 @@ class TestTestHelperProtocol:
     def test_the_server_carries_no_test_only_helpers(self):
         """The `test.*` client helpers live in tests/ui_test_helpers.py, not on the server."""
         for name in ("get_popup_state", "get_options_state", "get_storage_values",
-                     "validate_ui_sync", "refresh_ui_state", "test_storage_sync_workflow"):
+                     "validate_ui_sync", "test_storage_sync_workflow"):
             assert not hasattr(BrowserPlugServer, name), name
 
 

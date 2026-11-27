@@ -91,18 +91,11 @@ globs = ["_locales/**/*.json", "icons/app/*.png", "icons/toolbar/*/*/*.png"]
 # ---------------------------------------------------------------------------------------
 [action_strings]
 # Minimum action strings each background.js must yield (guards a regex that matches nothing).
-# 52 is the current exact count and the floor (51 until the case regex learnt camelCase
-# verbs and found `tabs.captureVisibleTab`, which it had skipped in both trees). It was 56 until the 2026-08-03 authorized
-# removals took FIVE actions out of BOTH trees together: content.read_clipboard (0 uses in
-# 3,112 calls, and the only zero-usage capability whose retention cost a sensitive
-# permission plus, on Chromium, a whole offscreen-document subsystem), the three history.*
-# actions (the history TOOL was deleted server-side), and test.clear_test_history — a test
-# helper that existed ONLY to clean up after the history tests and whose browser.history.*
-# calls cannot work now that the permission is gone. Recompute this number when actions
-# move; never lower it to paper over a parse failure.
-floor = 52
+# 28 is the current exact count and the floor. The case regex reads camelCase verbs too.
+# Recompute this number when actions move; never lower it to paper over a parse failure.
+floor = 28
 # Case labels present in only ONE tree, each with a reason below. Empty today: the two
-# trees expose the identical 52 actions (incl. the 8 test.* helpers).
+# trees expose the identical 28 actions (incl. the 4 test.* helpers).
 exempt = []
 [action_strings.reasons]
 # "area.verb" = "why this action exists in only one engine"
@@ -113,7 +106,7 @@ exempt = []
 # ---------------------------------------------------------------------------------------
 [server_sent_actions]
 # Minimum literal actions the extractor must find (guards a parse that matches nothing).
-floor = 30
+floor = 24
 # `<x>.request(<variable>, ...)` call sites: the extractor cannot read a variable, so each
 # one is named here with the reason its values are still covered. A new one fails until
 # it is listed, which is the prompt to check what it can send.
